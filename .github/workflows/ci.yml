@@ -1,0 +1,155 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  APP_ENV: ci
+  NODE_ENV: test
+
+jobs:
+  # Cheap checks first, so a formatting mistake fails in seconds rather than
+  # after a container spin-up. See docs/TESTING_STANDARDS.md §9.
+  verify:
+    name: Verify
+    runs-on: ubuntu-latest
+
+    # The integration suite runs PostgreSQL in-process (PGlite) and needs nothing
+    # here. This service exists for the e2e suite, which boots the real server
+    # process — and to run the migrations against the ACTUAL target major, since
+    # PGlite is a version ahead. See docs/DATA_MODEL.md §9.
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: kids_companion_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/kids_companion_ci
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # full history for the secret scan
+
+      - name: Scan for committed secrets
+        run: node infra/scripts/check-no-secrets.mjs
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Format
+        run: pnpm format:check
+
+      # Typecheck before lint, not after: `tsc -b` emits the workspace .d.ts
+      # files that ESLint's type-aware rules need to resolve cross-package types.
+      # Reversing these two passes locally (where dist/ already exists) and fails
+      # on a clean checkout.
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Lint
+        run: pnpm lint
+
+      # Fails if the schema changed without regenerating the types. Runs the
+      # migrations in-process (PGlite), so no database service is needed.
+      - name: Database types are current
+        run: pnpm db:types:check
+
+      - name: Unit tests
+        run: pnpm test:unit
+
+      - name: Integration tests
+        run: pnpm test:integration
+
+      - name: Build
+        run: pnpm build
+
+      # Applies the migrations to the real target major, which is the check the
+      # PGlite-based suites cannot make.
+      - name: Migrate
+        run: pnpm db:migrate
+
+      - name: End-to-end tests
+        run: pnpm test:e2e
+
+      - name: Dependency audit
+        run: pnpm audit --audit-level high
+
+  docker:
+    name: Docker image
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Build the API image
+        run: docker build -f infra/docker/api.Dockerfile -t kids-companion-api:ci .
+
+      # Proves the image boots and serves liveness — a build that produces an
+      # image which immediately exits is not a passing build.
+      - name: Smoke test the image
+        run: |
+          docker run -d --name api-smoke -p 8080:8080 \
+            -e APP_ENV=ci -e NODE_ENV=production -e LOG_LEVEL=fatal \
+            kids-companion-api:ci
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8080/health; then exit 0; fi
+            sleep 2
+          done
+          echo "Container did not become healthy"
+          docker logs api-smoke
+          exit 1
+
+  # Browser tests need ~400 MB of binaries, so they run in their own job rather
+  # than slowing every check above.
+  e2e-web:
+    name: Browser E2E
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm --filter @kids/web run build
+      - run: pnpm test:e2e:web
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7
+
+  # Phase 2 adds the safety corpus here. A regression fails the build.
+  # See docs/TESTING_STANDARDS.md §5.3.

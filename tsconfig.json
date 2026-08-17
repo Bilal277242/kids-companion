@@ -1,0 +1,39 @@
+{
+  "//": "Solution file. Holds no sources — it wires the project graph so `tsc -b` at the root builds everything in dependency order. apps/web and apps/mobile are absent on purpose: they are bundler-driven (Next, Metro), are not composite projects, and run their own `typecheck:app` script instead.",
+  "files": [],
+  "references": [
+    {
+      "path": "packages/types"
+    },
+    {
+      "path": "packages/shared"
+    },
+    {
+      "path": "packages/db"
+    },
+    {
+      "path": "packages/config"
+    },
+    {
+      "path": "packages/validation"
+    },
+    {
+      "path": "packages/ui"
+    },
+    {
+      "path": "services/ai"
+    },
+    {
+      "path": "services/voice"
+    },
+    {
+      "path": "services/payments"
+    },
+    {
+      "path": "services/auth"
+    },
+    {
+      "path": "apps/api"
+    }
+  ]
+}

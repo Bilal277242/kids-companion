@@ -1,0 +1,26 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+  - "services/*"
+  # `tests` itself, not `tests/*`: the cross-cutting suites are one package that
+  # depends on the workspace packages they exercise.
+  - "tests"
+
+catalog:
+  # Single source of truth for shared dependency versions. Workspace packages
+  # reference these with `"zod": "catalog:"` so bumps happen in exactly one place.
+  typescript: ^6.0.3
+  zod: ^4.4.3
+  pino: ^10.3.1
+  vitest: ^4.1.10
+
+# Postinstall scripts are blocked by default — a package running arbitrary code at
+# install time is the main supply-chain vector. Each entry below is an explicit,
+# reviewed exception; adding one is a security decision, not a convenience.
+allowBuilds:
+  esbuild: true # native binary download; underlies Vitest
+  # Denied on purpose: hooks are installed explicitly from the root `prepare`
+  # script (infra/scripts/install-git-hooks.mjs), so the behaviour is visible and
+  # skippable rather than a third-party postinstall writing into .git silently.
+  simple-git-hooks: false
+  unrs-resolver: true # native binary download; underlies the ESLint import resolver

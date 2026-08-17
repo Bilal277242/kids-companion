@@ -1,0 +1,19 @@
+{
+  "name": "@kids/tests",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Cross-cutting contract, integration, and end-to-end suites.",
+  "scripts": {
+    "test": "vitest run --project integration --passWithNoTests"
+  },
+  "devDependencies": {
+    "@kids/db": "workspace:*",
+    "@kids/shared": "workspace:*",
+    "@electric-sql/pglite": "^0.5.5",
+    "@kids/types": "workspace:*",
+    "@kids/auth": "workspace:*",
+    "@kids/config": "workspace:*",
+    "fastify": "^5.12.0"
+  }
+}

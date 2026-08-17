@@ -1,0 +1,27 @@
+node_modules
+**/node_modules
+dist
+**/dist
+.next
+**/.next
+.expo
+**/.expo
+coverage
+**/coverage
+*.tsbuildinfo
+
+.git
+.github
+.vscode
+.idea
+
+# Never let a local environment file into an image layer.
+.env
+.env.*
+!.env.example
+
+docs
+tests
+infra/docker
+*.md
+!README.md

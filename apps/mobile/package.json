@@ -1,0 +1,28 @@
+{
+  "name": "@kids/mobile",
+  "version": "0.0.0",
+  "private": true,
+  "description": "React Native app — child mode and parent mode.",
+  "main": "index.ts",
+  "scripts": {
+    "dev": "expo start",
+    "android": "expo start --android",
+    "ios": "expo start --ios",
+    "build": "echo \"Native builds run through EAS; see apps/mobile/README.md\" && exit 0",
+    "typecheck:app": "tsc --noEmit",
+    "clean": "rimraf .expo dist *.tsbuildinfo",
+    "test": "vitest run --project unit --passWithNoTests"
+  },
+  "dependencies": {
+    "@kids/types": "workspace:*",
+    "@kids/ui": "workspace:*",
+    "@kids/validation": "workspace:*",
+    "expo": "~57.0.13",
+    "expo-status-bar": "~57.0.1",
+    "react": "19.2.3",
+    "react-native": "0.86.2"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.18"
+  }
+}
