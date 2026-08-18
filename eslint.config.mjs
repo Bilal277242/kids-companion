@@ -174,6 +174,19 @@ export default tseslint.config(
     },
   },
 
+  /* ---------- Provider adapters ----------
+   * An adapter implements an async port. Several of its methods have nothing to
+   * await — the mock resolves immediately, and a real adapter's cheap paths do
+   * too — but the signature is fixed by the interface. `require-await` is right
+   * everywhere else, so it is relaxed here rather than globally.
+   */
+  {
+    files: ['services/*/src/*-provider.ts', 'services/*/src/*-adapter.ts'],
+    rules: {
+      '@typescript-eslint/require-await': 'off',
+    },
+  },
+
   /* ---------- React surfaces ---------- */
   {
     files: ['apps/web/**/*.{ts,tsx}', 'apps/mobile/**/*.{ts,tsx}', 'packages/ui/**/*.{ts,tsx}'],
@@ -195,6 +208,11 @@ export default tseslint.config(
       '@typescript-eslint/no-unnecessary-condition': 'off',
       'no-restricted-syntax': 'off',
       'import-x/no-extraneous-dependencies': 'off',
+      // Test doubles implement async interfaces and mostly have nothing to
+      // await. Enforcing it here produces `await Promise.resolve()` noise that
+      // makes the stub harder to read than the thing it stands in for.
+      '@typescript-eslint/require-await': 'off',
+      '@typescript-eslint/return-await': 'off',
     },
   },
 

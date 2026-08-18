@@ -24,6 +24,9 @@
     },
     {
       "path": "../../services/auth"
+    },
+    {
+      "path": "../../services/ai"
     }
   ]
 }

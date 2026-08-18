@@ -13,9 +13,15 @@ import {
 /**
  * The environment contract.
  *
- * Every variable the application reads is declared here. A variable absent from
- * this schema is not read anywhere — `process.env` is accessed in exactly one
- * place (`load.ts`) and nowhere else in the workspace.
+ * Every variable the API and the services read is declared here, and
+ * `process.env` is touched in exactly one place (`load.ts`).
+ *
+ * The one exception is the Next.js dashboard, which is a separate deployable
+ * with its own runtime and reads a single variable of its own (`API_BASE_URL`,
+ * in `apps/web/src/lib/api.ts`). Importing this schema there would drag the
+ * whole API contract — database, providers, telemetry — into a server bundle
+ * that needs none of it. Both variables live in `.env.example`, which stays the
+ * single contract.
  *
  * Sections marked "phase-gated" are typed but optional: the contract is fixed now
  * so `.env.example` and this schema cannot drift, while nothing consumes them
@@ -58,6 +64,12 @@ const rateLimitSchema = z.object({
   RATE_LIMIT_GLOBAL_PER_MINUTE: intFromEnv({ min: 1 }).default(600),
   RATE_LIMIT_AUTH_PER_15_MIN: intFromEnv({ min: 1 }).default(10),
   RATE_LIMIT_CONVERSATION_PER_MINUTE: intFromEnv({ min: 1 }).default(30),
+  // Starting sessions is far rarer than sending messages, and a client
+  // looping on start is the shape of a bug rather than a chatty child.
+  RATE_LIMIT_CONVERSATION_START_PER_HOUR: intFromEnv({ min: 1 }).default(30),
+  // Lower than the text limit: every voice turn costs an STT call and a TTS
+  // call on top of the model.
+  RATE_LIMIT_VOICE_PER_MINUTE: intFromEnv({ min: 1 }).default(15),
   RATE_LIMIT_UPLOAD_PER_MINUTE: intFromEnv({ min: 1 }).default(20),
 });
 
@@ -142,6 +154,13 @@ const providerSchema = z.object({
   AI_MODEL_CONVERSATION: z.string().optional(),
   AI_MODEL_SAFETY_CLASSIFIER: z.string().optional(),
   AI_MAX_OUTPUT_TOKENS: intFromEnv({ min: 1 }).default(512),
+  AI_TEMPERATURE: z.coerce.number().min(0).max(2).default(0.7),
+  // Roughly the last ten exchanges, per the product specification. Configurable
+  // rather than hard-coded: the right number trades conversational memory
+  // against cost and latency, and is an empirical question per age group.
+  AI_CONTEXT_MAX_EXCHANGES: intFromEnv({ min: 1, max: 50 }).default(10),
+  AI_CONTEXT_MAX_HISTORY_TOKENS: intFromEnv({ min: 100 }).default(2000),
+  AI_MODERATION_TIMEOUT_MS: intFromEnv({ min: 500 }).default(4000),
   AI_REQUEST_TIMEOUT_MS: intFromEnv({ min: 1_000 }).default(15_000),
   AI_MAX_RETRIES: intFromEnv({ min: 0, max: 5 }).default(2),
   AI_DAILY_COST_CEILING_USD: intFromEnv({ min: 0 }).default(50),
@@ -150,6 +169,31 @@ const providerSchema = z.object({
   OPENAI_API_KEY: z.string().optional(),
 
   STT_PROVIDER: z.enum(['deepgram', 'google', 'azure', 'openai', 'mock']).default('mock'),
+  // A child’s turn is a few seconds. The ceiling is deliberately generous for
+  // 30 s of any accepted codec and small enough that a hostile upload cannot
+  // occupy a request worker for long.
+  VOICE_MAX_UPLOAD_BYTES: intFromEnv({ min: 1_024 }).default(8 * 1024 * 1024),
+  VOICE_MAX_DURATION_MS: intFromEnv({ min: 500 }).default(30_000),
+  VOICE_MIN_DURATION_MS: intFromEnv({ min: 0 }).default(250),
+  // Browser MediaRecorder emits WebM with no duration until the stream is
+  // finalised, which is normal. Set false where the duration limit must be
+  // load-bearing rather than advisory.
+  VOICE_ALLOW_UNKNOWN_DURATION: boolFromEnv.default(true),
+  // Below this the child is asked to repeat rather than answered. Low
+  // confidence on child speech is expected (R-01); replying confidently to
+  // something they did not say is the failure this prevents.
+  VOICE_MIN_CONFIDENCE: z.coerce.number().min(0).max(1).default(0.4),
+  // How long synthesised reply audio stays fetchable. A timeout, not a
+  // retention period — see docs/adr/0006.
+  VOICE_TRANSIENT_AUDIO_SECONDS: intFromEnv({ min: 30, max: 3_600 }).default(300),
+
+  // Pronunciation practice. `transcription` derives a score from a transcript
+  // and can say nothing about how a sound was articulated; a phoneme-capable
+  // vendor is Q-06 and unresolved, so the port exists and the weak provider
+  // is what ships (services/practice/src/scoring.ts).
+  SPEECH_ANALYSIS_PROVIDER: z.enum(['transcription', 'mock']).default('mock'),
+  SPEECH_ANALYSIS_TIMEOUT_MS: intFromEnv({ min: 1_000 }).default(10_000),
+  RATE_LIMIT_PRACTICE_PER_MINUTE: intFromEnv({ min: 1 }).default(30),
   STT_TIMEOUT_MS: intFromEnv({ min: 1_000 }).default(10_000),
   STT_LANGUAGE_HINTS: csvFromEnv.default(['en-US', 'ur-PK']),
   DEEPGRAM_API_KEY: z.string().optional(),

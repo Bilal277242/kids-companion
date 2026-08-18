@@ -11,3 +11,4 @@ export * from './errors.js';
 export * from './ids.js';
 export * from './logger.js';
 export * from './redaction.js';
+export * from './resilience.js';

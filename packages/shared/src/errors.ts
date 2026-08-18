@@ -29,7 +29,12 @@ export const APP_ERROR_CODES = [
   'RESOURCE_NOT_FOUND',
   'CONFLICT_EMAIL_IN_USE',
   'QUOTA_DAILY_MINUTES_EXHAUSTED',
+  'QUOTA_DAILY_TURNS_EXHAUSTED',
+  'QUOTA_CONVERSATION_LENGTH',
+  'QUOTA_CONCURRENT_CONVERSATIONS',
   'QUOTA_CHILD_PROFILE_LIMIT',
+  'SUBSCRIPTION_REQUIRED',
+  'RATE_LIMITED',
   'SAFETY_INPUT_BLOCKED',
   'SAFETY_OUTPUT_BLOCKED',
   'SAFETY_CLASSIFIER_UNAVAILABLE',
@@ -69,6 +74,15 @@ export interface AppErrorOptions {
   readonly isRetryable?: boolean;
   /** Structured context for logs. Must never contain transcript text or child identifiers. */
   readonly context?: Readonly<Record<string, unknown>>;
+  /**
+   * Context that is DELIBERATELY client-visible.
+   *
+   * Separate from `context` so that exposure is a decision someone made, not a
+   * default. `context` is developer-authored and log-only; anything here has
+   * been chosen for a client to read — a parent's own quota numbers, a retry
+   * delay. Nothing internal belongs in it.
+   */
+  readonly clientContext?: Readonly<Record<string, unknown>>;
   readonly details?: readonly ValidationDetail[];
   readonly cause?: unknown;
 }
@@ -80,6 +94,8 @@ export interface ClientErrorBody {
     readonly message: string;
     readonly requestId: string;
     readonly details?: readonly ValidationDetail[];
+    /** Explicitly client-visible facts — quota numbers, retry delays. */
+    readonly meta?: Readonly<Record<string, unknown>>;
   };
 }
 
@@ -90,6 +106,7 @@ export class AppError extends Error {
   readonly httpStatus: number;
   readonly isRetryable: boolean;
   readonly context: Readonly<Record<string, unknown>>;
+  readonly clientContext?: Readonly<Record<string, unknown>>;
   readonly details?: readonly ValidationDetail[];
 
   constructor(options: AppErrorOptions) {
@@ -99,6 +116,7 @@ export class AppError extends Error {
     this.httpStatus = options.httpStatus;
     this.isRetryable = options.isRetryable ?? false;
     this.context = Object.freeze({ ...options.context });
+    if (options.clientContext) this.clientContext = Object.freeze({ ...options.clientContext });
     if (options.details) this.details = options.details;
   }
 
@@ -120,6 +138,7 @@ export class AppError extends Error {
         message: this.message,
         requestId,
         ...(this.details ? { details: this.details } : {}),
+        ...(this.clientContext ? { meta: this.clientContext } : {}),
       },
     };
   }
@@ -183,6 +202,66 @@ export const forbidden = (context?: Readonly<Record<string, unknown>>): AppError
     httpStatus: 403,
     message: 'Not permitted.',
     ...(context ? { context } : {}),
+  });
+
+/**
+ * A plan limit was reached.
+ *
+ * 429, not 403. The caller is permitted; they have used their allowance, and
+ * the distinction matters to a client deciding whether to show "upgrade" or
+ * "come back tomorrow". `resetsAt` is included so it can say which.
+ *
+ * The context carries the limit and what was used. That is the parent’s own
+ * number and telling them is the point — being cut off with no explanation is
+ * the thing that generates support tickets.
+ */
+export const rateLimited = (retryAfterSeconds?: number): AppError =>
+  new AppError({
+    code: 'RATE_LIMITED',
+    category: 'quota',
+    httpStatus: 429,
+    message: 'Too many requests.',
+    isRetryable: true,
+    ...(retryAfterSeconds === undefined ? {} : { clientContext: { retryAfterSeconds } }),
+  });
+
+export const quotaExhausted = (
+  code: Extract<
+    AppErrorCode,
+    | 'QUOTA_DAILY_MINUTES_EXHAUSTED'
+    | 'QUOTA_DAILY_TURNS_EXHAUSTED'
+    | 'QUOTA_CONVERSATION_LENGTH'
+    | 'QUOTA_CONCURRENT_CONVERSATIONS'
+    | 'QUOTA_CHILD_PROFILE_LIMIT'
+  >,
+  context: Readonly<Record<string, unknown>>,
+): AppError =>
+  new AppError({
+    code,
+    category: 'quota',
+    httpStatus: 429,
+    message: 'This limit has been reached.',
+    context,
+    // A parent's own allowance is not an internal. Telling them what the limit
+    // is and when it resets is the difference between an app that explains
+    // itself and one that just says no.
+    clientContext: context,
+  });
+
+/**
+ * The plan does not include this, at any usage level.
+ *
+ * Separate from `quotaExhausted` because the remedy is different: waiting does
+ * not help, and a client should say so rather than showing a countdown.
+ */
+export const subscriptionRequired = (context: Readonly<Record<string, unknown>>): AppError =>
+  new AppError({
+    code: 'SUBSCRIPTION_REQUIRED',
+    category: 'quota',
+    httpStatus: 402,
+    message: 'This requires a different plan.',
+    context,
+    clientContext: context,
   });
 
 export const providerTimeout = (provider: string, operation: string, cause?: unknown): AppError =>

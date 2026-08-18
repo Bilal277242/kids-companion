@@ -10,6 +10,37 @@
 
 export type Json = string | number | boolean | null | { [key: string]: Json } | Json[];
 
+/** `public.achievements` */
+export interface AchievementsRow {
+  id: string;
+  achievement_key: string;
+  title: string;
+  description: string;
+  icon_key: string;
+  rule_kind: 'attempts_total' | 'sessions_completed' | 'distinct_days' | 'exercises_tried';
+  threshold: number;
+  is_active: boolean;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AchievementsInsert {
+  id?: string;
+  achievement_key: string;
+  title: string;
+  description: string;
+  icon_key?: string;
+  rule_kind: 'attempts_total' | 'sessions_completed' | 'distinct_days' | 'exercises_tried';
+  threshold: number;
+  is_active?: boolean;
+  sort_order?: number;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export type AchievementsUpdate = Partial<AchievementsInsert>;
+
 /** `public.ai_characters` */
 export interface AiCharactersRow {
   id: string;
@@ -25,6 +56,17 @@ export interface AiCharactersRow {
   sort_order: number;
   created_at: string;
   updated_at: string;
+  prompt_key: string | null;
+  requires_paid_plan: boolean;
+  personality_traits: string[];
+  conversation_style: 'responsive' | 'inquisitive' | 'narrative' | 'explanatory';
+  vocabulary_style: 'simple' | 'everyday' | 'descriptive' | 'precise';
+  encouragement_style: 'warm' | 'celebratory' | 'quiet' | 'matter_of_fact';
+  story_style: 'collaborative' | 'gentle' | 'adventurous' | 'factual' | 'none';
+  greeting_style: 'friendly' | 'bouncy' | 'quiet' | 'welcoming' | 'curious';
+  farewell_style: 'warm' | 'sleepy' | 'safe_landing' | 'thoughtful';
+  educational_objectives: string[];
+  voice_config: Json;
 }
 
 export interface AiCharactersInsert {
@@ -41,6 +83,17 @@ export interface AiCharactersInsert {
   sort_order?: number;
   created_at?: string;
   updated_at?: string;
+  prompt_key?: string | null;
+  requires_paid_plan?: boolean;
+  personality_traits?: string[];
+  conversation_style?: 'responsive' | 'inquisitive' | 'narrative' | 'explanatory';
+  vocabulary_style?: 'simple' | 'everyday' | 'descriptive' | 'precise';
+  encouragement_style?: 'warm' | 'celebratory' | 'quiet' | 'matter_of_fact';
+  story_style?: 'collaborative' | 'gentle' | 'adventurous' | 'factual' | 'none';
+  greeting_style?: 'friendly' | 'bouncy' | 'quiet' | 'welcoming' | 'curious';
+  farewell_style?: 'warm' | 'sleepy' | 'safe_landing' | 'thoughtful';
+  educational_objectives?: string[];
+  voice_config?: Json;
 }
 
 export type AiCharactersUpdate = Partial<AiCharactersInsert>;
@@ -75,6 +128,41 @@ export interface AnalyticsEventsInsert {
 }
 
 export type AnalyticsEventsUpdate = Partial<AnalyticsEventsInsert>;
+
+/** `public.audio_artifacts` */
+export interface AudioArtifactsRow {
+  id: string;
+  child_id: string;
+  conversation_id: string | null;
+  message_id: string | null;
+  kind: 'child_upload' | 'companion_reply';
+  storage_key: string;
+  mime_type: 'audio/wav' | 'audio/ogg' | 'audio/webm' | 'audio/mp4' | 'audio/mpeg';
+  byte_size: number;
+  duration_ms: number | null;
+  retention_basis: 'policy_zero' | 'no_consent' | 'synthesis' | 'parent_opt_in';
+  expires_at: string;
+  deleted_at: string | null;
+  created_at: string;
+}
+
+export interface AudioArtifactsInsert {
+  id?: string;
+  child_id: string;
+  conversation_id?: string | null;
+  message_id?: string | null;
+  kind: 'child_upload' | 'companion_reply';
+  storage_key: string;
+  mime_type: 'audio/wav' | 'audio/ogg' | 'audio/webm' | 'audio/mp4' | 'audio/mpeg';
+  byte_size: number;
+  duration_ms?: number | null;
+  retention_basis: 'policy_zero' | 'no_consent' | 'synthesis' | 'parent_opt_in';
+  expires_at: string;
+  deleted_at?: string | null;
+  created_at?: string;
+}
+
+export type AudioArtifactsUpdate = Partial<AudioArtifactsInsert>;
 
 /** `public.audit_logs` */
 export interface AuditLogsRow {
@@ -115,6 +203,25 @@ export interface AuditLogsInsert {
 
 export type AuditLogsUpdate = Partial<AuditLogsInsert>;
 
+/** `public.character_catalogue` (view) */
+export interface CharacterCatalogueRow {
+  id: string | null;
+  slug: string | null;
+  display_name: string | null;
+  tagline: string | null;
+  description: string | null;
+  allowed_age_groups: string[] | null;
+  avatar_key: string | null;
+  personality_traits: string[] | null;
+  conversation_style: string | null;
+  vocabulary_style: string | null;
+  encouragement_style: string | null;
+  story_style: string | null;
+  educational_objectives: string[] | null;
+  requires_paid_plan: boolean | null;
+  sort_order: number | null;
+}
+
 /** `public.character_languages` */
 export interface CharacterLanguagesRow {
   character_id: string;
@@ -131,6 +238,25 @@ export interface CharacterLanguagesInsert {
 }
 
 export type CharacterLanguagesUpdate = Partial<CharacterLanguagesInsert>;
+
+/** `public.child_achievements` */
+export interface ChildAchievementsRow {
+  id: string;
+  child_id: string;
+  achievement_id: string;
+  awarded_at: string;
+  created_at: string;
+}
+
+export interface ChildAchievementsInsert {
+  id?: string;
+  child_id: string;
+  achievement_id: string;
+  awarded_at?: string;
+  created_at?: string;
+}
+
+export type ChildAchievementsUpdate = Partial<ChildAchievementsInsert>;
 
 /** `public.child_languages` */
 export interface ChildLanguagesRow {
@@ -192,6 +318,31 @@ export interface ChildLearningTopicsInsert {
 }
 
 export type ChildLearningTopicsUpdate = Partial<ChildLearningTopicsInsert>;
+
+/** `public.child_vocabulary` */
+export interface ChildVocabularyRow {
+  id: string;
+  child_id: string;
+  vocabulary_word_id: string;
+  times_used: number;
+  first_used_at: string;
+  last_used_at: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ChildVocabularyInsert {
+  id?: string;
+  child_id: string;
+  vocabulary_word_id: string;
+  times_used?: number;
+  first_used_at?: string;
+  last_used_at?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export type ChildVocabularyUpdate = Partial<ChildVocabularyInsert>;
 
 /** `public.children` */
 export interface ChildrenRow {
@@ -305,6 +456,10 @@ export interface ContentFlagsRow {
   parent_notified_at: string | null;
   created_at: string;
   updated_at: string;
+  detector: string | null;
+  policy_version: string | null;
+  action_taken: 'allow' | 'observe' | 'redirect' | 'block' | 'end_session' | null;
+  attempt_index: number;
 }
 
 export interface ContentFlagsInsert {
@@ -323,6 +478,10 @@ export interface ContentFlagsInsert {
   parent_notified_at?: string | null;
   created_at?: string;
   updated_at?: string;
+  detector?: string | null;
+  policy_version?: string | null;
+  action_taken?: 'allow' | 'observe' | 'redirect' | 'block' | 'end_session' | null;
+  attempt_index?: number;
 }
 
 export type ContentFlagsUpdate = Partial<ContentFlagsInsert>;
@@ -338,9 +497,14 @@ export interface ConversationsRow {
   total_cost_usd: string;
   started_at: string;
   ended_at: string | null;
-  end_reason: 'child_ended' | 'timeout' | 'quota_exhausted' | 'parent_ended' | 'safety_ended' | 'error' | null;
+  end_reason: 'child_ended' | 'timeout' | 'quota_exhausted' | 'parent_ended' | 'safety_ended' | 'error' | 'cost_ceiling' | 'provider_unavailable' | 'consent_withdrawn' | null;
   created_at: string;
   updated_at: string;
+  total_input_tokens: number;
+  total_output_tokens: number;
+  provider: string | null;
+  model: string | null;
+  context_message_count: number;
 }
 
 export interface ConversationsInsert {
@@ -353,9 +517,14 @@ export interface ConversationsInsert {
   total_cost_usd?: string;
   started_at?: string;
   ended_at?: string | null;
-  end_reason?: 'child_ended' | 'timeout' | 'quota_exhausted' | 'parent_ended' | 'safety_ended' | 'error' | null;
+  end_reason?: 'child_ended' | 'timeout' | 'quota_exhausted' | 'parent_ended' | 'safety_ended' | 'error' | 'cost_ceiling' | 'provider_unavailable' | 'consent_withdrawn' | null;
   created_at?: string;
   updated_at?: string;
+  total_input_tokens?: number;
+  total_output_tokens?: number;
+  provider?: string | null;
+  model?: string | null;
+  context_message_count?: number;
 }
 
 export type ConversationsUpdate = Partial<ConversationsInsert>;
@@ -393,32 +562,119 @@ export interface EmailVerificationsInsert {
 
 export type EmailVerificationsUpdate = Partial<EmailVerificationsInsert>;
 
+/** `public.learning_daily` */
+export interface LearningDailyRow {
+  id: string;
+  child_id: string;
+  day: string;
+  conversation_seconds: number;
+  conversation_turns: number;
+  conversation_count: number;
+  words_used: number;
+  new_vocabulary: number;
+  stories_completed: number;
+  exercises_completed: number;
+  pronunciation_score_sum: number;
+  pronunciation_score_count: number;
+  computed_at: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LearningDailyInsert {
+  id?: string;
+  child_id: string;
+  day: string;
+  conversation_seconds?: number;
+  conversation_turns?: number;
+  conversation_count?: number;
+  words_used?: number;
+  new_vocabulary?: number;
+  stories_completed?: number;
+  exercises_completed?: number;
+  pronunciation_score_sum?: number;
+  pronunciation_score_count?: number;
+  computed_at?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export type LearningDailyUpdate = Partial<LearningDailyInsert>;
+
+/** `public.learning_event_types` */
+export interface LearningEventTypesRow {
+  event_type: string;
+  display_name: string;
+  metric_key: string | null;
+  aggregation: 'count' | 'distinct';
+  payload_field: string | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LearningEventTypesInsert {
+  event_type: string;
+  display_name: string;
+  metric_key?: string | null;
+  aggregation?: 'count' | 'distinct';
+  payload_field?: string | null;
+  is_active?: boolean;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export type LearningEventTypesUpdate = Partial<LearningEventTypesInsert>;
+
 /** `public.learning_events` */
 export interface LearningEventsRow {
   id: string;
   child_id: string;
-  event_type: 'skill_exposed' | 'skill_practised' | 'skill_succeeded' | 'word_encountered' | 'story_completed' | 'session_completed';
+  event_type: string;
   skill_key: string | null;
   conversation_id: string | null;
   speech_practice_id: string | null;
   payload: Json;
   occurred_at: string;
   created_at: string;
+  idempotency_key: string | null;
 }
 
 export interface LearningEventsInsert {
   id?: string;
   child_id: string;
-  event_type: 'skill_exposed' | 'skill_practised' | 'skill_succeeded' | 'word_encountered' | 'story_completed' | 'session_completed';
+  event_type: string;
   skill_key?: string | null;
   conversation_id?: string | null;
   speech_practice_id?: string | null;
   payload?: Json;
   occurred_at?: string;
   created_at?: string;
+  idempotency_key?: string | null;
 }
 
 export type LearningEventsUpdate = Partial<LearningEventsInsert>;
+
+/** `public.learning_milestones` */
+export interface LearningMilestonesRow {
+  id: string;
+  child_id: string;
+  milestone_key: string;
+  title: string;
+  achieved_at: string;
+  created_at: string;
+}
+
+export interface LearningMilestonesInsert {
+  id?: string;
+  child_id: string;
+  milestone_key: string;
+  title: string;
+  achieved_at?: string;
+  created_at?: string;
+}
+
+export type LearningMilestonesUpdate = Partial<LearningMilestonesInsert>;
 
 /** `public.learning_progress` */
 export interface LearningProgressRow {
@@ -447,6 +703,33 @@ export interface LearningProgressInsert {
 
 export type LearningProgressUpdate = Partial<LearningProgressInsert>;
 
+/** `public.learning_skill_levels` */
+export interface LearningSkillLevelsRow {
+  id: string;
+  child_id: string;
+  vocabulary_level: 'getting_started' | 'growing' | 'confident';
+  pronunciation_level: 'getting_started' | 'growing' | 'confident';
+  conversation_skill_level: 'getting_started' | 'growing' | 'confident';
+  basis: Json;
+  computed_at: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LearningSkillLevelsInsert {
+  id?: string;
+  child_id: string;
+  vocabulary_level?: 'getting_started' | 'growing' | 'confident';
+  pronunciation_level?: 'getting_started' | 'growing' | 'confident';
+  conversation_skill_level?: 'getting_started' | 'growing' | 'confident';
+  basis?: Json;
+  computed_at?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export type LearningSkillLevelsUpdate = Partial<LearningSkillLevelsInsert>;
+
 /** `public.learning_topics` */
 export interface LearningTopicsRow {
   key: string;
@@ -471,6 +754,47 @@ export interface LearningTopicsInsert {
 }
 
 export type LearningTopicsUpdate = Partial<LearningTopicsInsert>;
+
+/** `public.learning_weekly` */
+export interface LearningWeeklyRow {
+  id: string;
+  child_id: string;
+  week_start: string;
+  active_days: number;
+  conversation_seconds: number;
+  conversation_turns: number;
+  conversation_count: number;
+  words_used: number;
+  new_vocabulary: number;
+  stories_completed: number;
+  exercises_completed: number;
+  pronunciation_score_sum: number;
+  pronunciation_score_count: number;
+  computed_at: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LearningWeeklyInsert {
+  id?: string;
+  child_id: string;
+  week_start: string;
+  active_days?: number;
+  conversation_seconds?: number;
+  conversation_turns?: number;
+  conversation_count?: number;
+  words_used?: number;
+  new_vocabulary?: number;
+  stories_completed?: number;
+  exercises_completed?: number;
+  pronunciation_score_sum?: number;
+  pronunciation_score_count?: number;
+  computed_at?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export type LearningWeeklyUpdate = Partial<LearningWeeklyInsert>;
 
 /** `public.login_attempts` */
 export interface LoginAttemptsRow {
@@ -512,6 +836,10 @@ export interface MessagesRow {
   cost_usd: string | null;
   latency_ms: number | null;
   created_at: string;
+  provider: string | null;
+  model: string | null;
+  safety_layers_passed: string[];
+  input_mode: 'text' | 'voice';
 }
 
 export interface MessagesInsert {
@@ -530,6 +858,10 @@ export interface MessagesInsert {
   cost_usd?: string | null;
   latency_ms?: number | null;
   created_at?: string;
+  provider?: string | null;
+  model?: string | null;
+  safety_layers_passed?: string[];
+  input_mode?: 'text' | 'voice';
 }
 
 export type MessagesUpdate = Partial<MessagesInsert>;
@@ -588,6 +920,10 @@ export interface ParentalControlsRow {
   is_paused: boolean;
   created_at: string;
   updated_at: string;
+  content_filter_level: 'standard' | 'strict';
+  allowed_days: number[];
+  notify_on_weekly_summary: boolean;
+  notify_on_time_limit: boolean;
 }
 
 export interface ParentalControlsInsert {
@@ -606,6 +942,10 @@ export interface ParentalControlsInsert {
   is_paused?: boolean;
   created_at?: string;
   updated_at?: string;
+  content_filter_level?: 'standard' | 'strict';
+  allowed_days?: number[];
+  notify_on_weekly_summary?: boolean;
+  notify_on_time_limit?: boolean;
 }
 
 export type ParentalControlsUpdate = Partial<ParentalControlsInsert>;
@@ -715,6 +1055,62 @@ export interface PaymentEventsInsert {
 
 export type PaymentEventsUpdate = Partial<PaymentEventsInsert>;
 
+/** `public.practice_exercises` */
+export interface PracticeExercisesRow {
+  id: string;
+  exercise_key: string;
+  language_code: string;
+  title: string;
+  skill_key: string;
+  kind: 'word' | 'syllable';
+  age_groups: string[];
+  sort_order: number;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PracticeExercisesInsert {
+  id?: string;
+  exercise_key: string;
+  language_code?: string;
+  title: string;
+  skill_key: string;
+  kind: 'word' | 'syllable';
+  age_groups?: string[];
+  sort_order?: number;
+  is_active?: boolean;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export type PracticeExercisesUpdate = Partial<PracticeExercisesInsert>;
+
+/** `public.practice_targets` */
+export interface PracticeTargetsRow {
+  id: string;
+  exercise_id: string;
+  sequence: number;
+  text: string;
+  syllables: string[];
+  expected_ipa: string | null;
+  hint: string | null;
+  created_at: string;
+}
+
+export interface PracticeTargetsInsert {
+  id?: string;
+  exercise_id: string;
+  sequence: number;
+  text: string;
+  syllables?: string[];
+  expected_ipa?: string | null;
+  hint?: string | null;
+  created_at?: string;
+}
+
+export type PracticeTargetsUpdate = Partial<PracticeTargetsInsert>;
+
 /** `public.pronunciation_results` */
 export interface PronunciationResultsRow {
   id: string;
@@ -728,6 +1124,13 @@ export interface PronunciationResultsRow {
   is_correct: boolean;
   duration_ms: number | null;
   created_at: string;
+  language_code: string;
+  exercise_key: string | null;
+  confidence: number;
+  analysis_method: 'phoneme_alignment' | 'word_alignment' | 'transcript_similarity';
+  phoneme_data_available: boolean;
+  provider: string | null;
+  provider_model: string | null;
 }
 
 export interface PronunciationResultsInsert {
@@ -742,9 +1145,49 @@ export interface PronunciationResultsInsert {
   is_correct?: boolean;
   duration_ms?: number | null;
   created_at?: string;
+  language_code?: string;
+  exercise_key?: string | null;
+  confidence?: number;
+  analysis_method?: 'phoneme_alignment' | 'word_alignment' | 'transcript_similarity';
+  phoneme_data_available?: boolean;
+  provider?: string | null;
+  provider_model?: string | null;
 }
 
 export type PronunciationResultsUpdate = Partial<PronunciationResultsInsert>;
+
+/** `public.safety_policies` */
+export interface SafetyPoliciesRow {
+  id: string;
+  category: string;
+  age_group: '*' | 'AGE_3_5' | 'AGE_6_8' | 'AGE_9_10';
+  applies_to: 'child_input' | 'model_output' | 'both';
+  action: 'allow' | 'observe' | 'redirect' | 'block' | 'end_session';
+  min_confidence: number;
+  escalates: boolean;
+  policy_version: string;
+  rationale: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SafetyPoliciesInsert {
+  id?: string;
+  category: string;
+  age_group?: '*' | 'AGE_3_5' | 'AGE_6_8' | 'AGE_9_10';
+  applies_to: 'child_input' | 'model_output' | 'both';
+  action: 'allow' | 'observe' | 'redirect' | 'block' | 'end_session';
+  min_confidence?: number;
+  escalates?: boolean;
+  policy_version: string;
+  rationale: string;
+  is_active?: boolean;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export type SafetyPoliciesUpdate = Partial<SafetyPoliciesInsert>;
 
 /** `public.sessions` */
 export interface SessionsRow {
@@ -833,6 +1276,11 @@ export interface SubscriptionPlansRow {
   sort_order: number;
   created_at: string;
   updated_at: string;
+  daily_turn_limit: number;
+  max_conversation_turns: number;
+  concurrent_conversation_limit: number;
+  voice_enabled: boolean;
+  daily_voice_turn_limit: number;
 }
 
 export interface SubscriptionPlansInsert {
@@ -853,6 +1301,11 @@ export interface SubscriptionPlansInsert {
   sort_order?: number;
   created_at?: string;
   updated_at?: string;
+  daily_turn_limit?: number;
+  max_conversation_turns?: number;
+  concurrent_conversation_limit?: number;
+  voice_enabled?: boolean;
+  daily_voice_turn_limit?: number;
 }
 
 export type SubscriptionPlansUpdate = Partial<SubscriptionPlansInsert>;
@@ -972,26 +1425,93 @@ export interface TransactionsInsert {
 
 export type TransactionsUpdate = Partial<TransactionsInsert>;
 
+/** `public.usage_daily` */
+export interface UsageDailyRow {
+  id: string;
+  child_id: string;
+  usage_date: string;
+  turns: number;
+  blocked_turns: number;
+  conversations_started: number;
+  input_tokens: string;
+  output_tokens: string;
+  cost_usd: string;
+  created_at: string;
+  updated_at: string;
+  voice_turns: number;
+}
+
+export interface UsageDailyInsert {
+  id?: string;
+  child_id: string;
+  usage_date: string;
+  turns?: number;
+  blocked_turns?: number;
+  conversations_started?: number;
+  input_tokens?: string;
+  output_tokens?: string;
+  cost_usd?: string;
+  created_at?: string;
+  updated_at?: string;
+  voice_turns?: number;
+}
+
+export type UsageDailyUpdate = Partial<UsageDailyInsert>;
+
+/** `public.vocabulary_words` */
+export interface VocabularyWordsRow {
+  id: string;
+  language_code: string;
+  word: string;
+  tier: number;
+  topic_key: string | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface VocabularyWordsInsert {
+  id?: string;
+  language_code?: string;
+  word: string;
+  tier?: number;
+  topic_key?: string | null;
+  is_active?: boolean;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export type VocabularyWordsUpdate = Partial<VocabularyWordsInsert>;
+
 /** Supabase-shaped schema map: `createClient<Database>(...)`. */
 export interface Database {
   public: {
     Tables: {
+      achievements: { Row: AchievementsRow; Insert: AchievementsInsert; Update: AchievementsUpdate };
       ai_characters: { Row: AiCharactersRow; Insert: AiCharactersInsert; Update: AiCharactersUpdate };
       analytics_events: { Row: AnalyticsEventsRow; Insert: AnalyticsEventsInsert; Update: AnalyticsEventsUpdate };
+      audio_artifacts: { Row: AudioArtifactsRow; Insert: AudioArtifactsInsert; Update: AudioArtifactsUpdate };
       audit_logs: { Row: AuditLogsRow; Insert: AuditLogsInsert; Update: AuditLogsUpdate };
       character_languages: { Row: CharacterLanguagesRow; Insert: CharacterLanguagesInsert; Update: CharacterLanguagesUpdate };
+      child_achievements: { Row: ChildAchievementsRow; Insert: ChildAchievementsInsert; Update: ChildAchievementsUpdate };
       child_languages: { Row: ChildLanguagesRow; Insert: ChildLanguagesInsert; Update: ChildLanguagesUpdate };
       child_learning_preferences: { Row: ChildLearningPreferencesRow; Insert: ChildLearningPreferencesInsert; Update: ChildLearningPreferencesUpdate };
       child_learning_topics: { Row: ChildLearningTopicsRow; Insert: ChildLearningTopicsInsert; Update: ChildLearningTopicsUpdate };
+      child_vocabulary: { Row: ChildVocabularyRow; Insert: ChildVocabularyInsert; Update: ChildVocabularyUpdate };
       children: { Row: ChildrenRow; Insert: ChildrenInsert; Update: ChildrenUpdate };
       consent_records: { Row: ConsentRecordsRow; Insert: ConsentRecordsInsert; Update: ConsentRecordsUpdate };
       consent_requirements: { Row: ConsentRequirementsRow; Insert: ConsentRequirementsInsert; Update: ConsentRequirementsUpdate };
       content_flags: { Row: ContentFlagsRow; Insert: ContentFlagsInsert; Update: ContentFlagsUpdate };
       conversations: { Row: ConversationsRow; Insert: ConversationsInsert; Update: ConversationsUpdate };
       email_verifications: { Row: EmailVerificationsRow; Insert: EmailVerificationsInsert; Update: EmailVerificationsUpdate };
+      learning_daily: { Row: LearningDailyRow; Insert: LearningDailyInsert; Update: LearningDailyUpdate };
+      learning_event_types: { Row: LearningEventTypesRow; Insert: LearningEventTypesInsert; Update: LearningEventTypesUpdate };
       learning_events: { Row: LearningEventsRow; Insert: LearningEventsInsert; Update: LearningEventsUpdate };
+      learning_milestones: { Row: LearningMilestonesRow; Insert: LearningMilestonesInsert; Update: LearningMilestonesUpdate };
       learning_progress: { Row: LearningProgressRow; Insert: LearningProgressInsert; Update: LearningProgressUpdate };
+      learning_skill_levels: { Row: LearningSkillLevelsRow; Insert: LearningSkillLevelsInsert; Update: LearningSkillLevelsUpdate };
       learning_topics: { Row: LearningTopicsRow; Insert: LearningTopicsInsert; Update: LearningTopicsUpdate };
+      learning_weekly: { Row: LearningWeeklyRow; Insert: LearningWeeklyInsert; Update: LearningWeeklyUpdate };
       login_attempts: { Row: LoginAttemptsRow; Insert: LoginAttemptsInsert; Update: LoginAttemptsUpdate };
       messages: { Row: MessagesRow; Insert: MessagesInsert; Update: MessagesUpdate };
       notifications: { Row: NotificationsRow; Insert: NotificationsInsert; Update: NotificationsUpdate };
@@ -999,15 +1519,21 @@ export interface Database {
       parents: { Row: ParentsRow; Insert: ParentsInsert; Update: ParentsUpdate };
       password_resets: { Row: PasswordResetsRow; Insert: PasswordResetsInsert; Update: PasswordResetsUpdate };
       payment_events: { Row: PaymentEventsRow; Insert: PaymentEventsInsert; Update: PaymentEventsUpdate };
+      practice_exercises: { Row: PracticeExercisesRow; Insert: PracticeExercisesInsert; Update: PracticeExercisesUpdate };
+      practice_targets: { Row: PracticeTargetsRow; Insert: PracticeTargetsInsert; Update: PracticeTargetsUpdate };
       pronunciation_results: { Row: PronunciationResultsRow; Insert: PronunciationResultsInsert; Update: PronunciationResultsUpdate };
+      safety_policies: { Row: SafetyPoliciesRow; Insert: SafetyPoliciesInsert; Update: SafetyPoliciesUpdate };
       sessions: { Row: SessionsRow; Insert: SessionsInsert; Update: SessionsUpdate };
       speech_practice: { Row: SpeechPracticeRow; Insert: SpeechPracticeInsert; Update: SpeechPracticeUpdate };
       subscription_plans: { Row: SubscriptionPlansRow; Insert: SubscriptionPlansInsert; Update: SubscriptionPlansUpdate };
       subscriptions: { Row: SubscriptionsRow; Insert: SubscriptionsInsert; Update: SubscriptionsUpdate };
       supported_languages: { Row: SupportedLanguagesRow; Insert: SupportedLanguagesInsert; Update: SupportedLanguagesUpdate };
       transactions: { Row: TransactionsRow; Insert: TransactionsInsert; Update: TransactionsUpdate };
+      usage_daily: { Row: UsageDailyRow; Insert: UsageDailyInsert; Update: UsageDailyUpdate };
+      vocabulary_words: { Row: VocabularyWordsRow; Insert: VocabularyWordsInsert; Update: VocabularyWordsUpdate };
     };
     Views: {
+      character_catalogue: { Row: CharacterCatalogueRow };
       current_consents: { Row: CurrentConsentsRow };
     };
   };

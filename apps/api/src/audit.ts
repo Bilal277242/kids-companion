@@ -35,6 +35,10 @@ export const AUDIT_ACTIONS = [
   'child.profile.archived',
   'child.profile.restored',
   'child.profile.deleted',
+  'conversation.started',
+  'conversation.ended',
+  'conversation.quota_exhausted',
+  'safety.escalation.raised',
   'consent.granted',
   'consent.withdrawn',
   'account.deletion.requested',
@@ -44,6 +48,19 @@ export const AUDIT_ACTIONS = [
   'admin.role.assigned',
   'admin.account.suspended',
   'support.flag.reviewed',
+
+  // Voice. The retention DECISION is audited on every turn, so "were
+  // recordings kept?" is answerable from the audit log alone rather than by
+  // trusting that a configuration value was what someone said it was.
+  'voice.turn.completed',
+  'voice.audio.expired',
+
+  // Practice.
+  'practice.session.started',
+
+  // Parental controls. "Who loosened this, and when?" has to be answerable.
+  'parental_controls.updated',
+  'conversation.parental_limit_reached',
 ] as const;
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
 

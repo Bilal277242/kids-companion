@@ -14,6 +14,46 @@ https://api.kidscompanion.app/v1/children/{childId}/conversations
 
 **Versioning.** `/v1` from the first endpoint. Adding a version prefix later is a migration; having one from the start costs a folder name. A breaking change means `/v2` and a documented deprecation window — never a silent change to `/v1`, because a mobile app on a two-year-old install will still be calling it.
 
+### 1.1 The `/api` prefix on conversations ⚠️
+
+The conversation endpoints are mounted under `/api`, not `/v1`:
+
+```
+POST /api/conversations/start
+POST /api/conversations/{id}/message
+GET  /api/conversations/{id}
+POST /api/conversations/{id}/end
+GET  /api/conversations?childId={childId}
+```
+
+This came from the product specification and it is **inconsistent with the rest of this service**, which is under `/v1`. It is recorded here rather than quietly resolved in one direction, because both fixes cost something and the choice belongs to whoever owns the client contract:
+
+- Move conversations to `/v1/conversations/…` — consistent, and it discards a specification that clients may already have been written against.
+- Move everything else to `/api/v1/…` — consistent, and it is a breaking change to five route families to make one of them fit.
+
+Until that is decided, `/api` carries no version, which means the versioning guarantee above does not apply to it. **That is the real cost of leaving this open**, and it is the reason this needs a decision before a client ships against these paths rather than after.
+
+### 1.2 Conversation limits and quotas
+
+Two things are worth knowing about how the conversation endpoints refuse work.
+
+**A reached limit is a 429 at `/start` and a 200 at `/message`.** That is deliberate, not an inconsistency. Nobody is listening when a session is created, so the client gets the machine-readable form and can decide between "upgrade" and "come back tomorrow". A child IS listening on `/message`, and a raw error there surfaces to a five-year-old as a broken app — so the turn returns `status: "ended"` with a warm goodbye, and the same facts travel in the `limits` block ([ERROR_HANDLING.md §10](ERROR_HANDLING.md)).
+
+**Quota and subscription errors carry a `meta` object.** Error bodies otherwise expose only `code`, `message`, `requestId`, and `details`. `meta` is an explicit opt-in for facts a client is meant to read — the limit, what was used, when it resets — and is set per error constructor rather than by default, so exposing anything through it is a decision someone made.
+
+```json
+{
+  "error": {
+    "code": "QUOTA_DAILY_TURNS_EXHAUSTED",
+    "message": "This limit has been reached.",
+    "requestId": "…",
+    "meta": { "limit": 20, "used": 20, "plan": "free", "resetsAt": "…" }
+  }
+}
+```
+
+Limits themselves live in `subscription_plans`, not in application constants, so "why was my child cut off?" has one answer a support engineer can read. See [DATA_MODEL.md](DATA_MODEL.md) for the entitlement resolution and the `usage_daily` ledger.
+
 ---
 
 ## 2. Resources and methods

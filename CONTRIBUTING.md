@@ -2,7 +2,7 @@
 
 ## Before your first change
 
-Read [ARCHITECTURE.md](ARCHITECTURE.md), [docs/CHILD_SAFETY.md](docs/CHILD_SAFETY.md), [PRIVACY.md](PRIVACY.md), and [SECURITY.md](SECURITY.md). These are not background reading — they contain constraints that will fail your pull request in review.
+Read [ARCHITECTURE.md](ARCHITECTURE.md), [docs/CHILD_SAFETY.md](docs/CHILD_SAFETY.md) (and [docs/SAFETY_SUBSYSTEM.md](docs/SAFETY_SUBSYSTEM.md) before touching anything under `services/safety`), [PRIVACY.md](PRIVACY.md), and [SECURITY.md](SECURITY.md). These are not background reading — they contain constraints that will fail your pull request in review.
 
 ---
 

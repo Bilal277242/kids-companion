@@ -8,12 +8,17 @@
     "test": "vitest run --project integration --passWithNoTests"
   },
   "devDependencies": {
-    "@kids/db": "workspace:*",
-    "@kids/shared": "workspace:*",
     "@electric-sql/pglite": "^0.5.5",
-    "@kids/types": "workspace:*",
+    "@kids/ai": "workspace:*",
     "@kids/auth": "workspace:*",
     "@kids/config": "workspace:*",
+    "@kids/db": "workspace:*",
+    "@kids/learning": "workspace:*",
+    "@kids/practice": "workspace:*",
+    "@kids/safety": "workspace:*",
+    "@kids/shared": "workspace:*",
+    "@kids/types": "workspace:*",
+    "@kids/voice": "workspace:*",
     "fastify": "^5.12.0"
   }
 }

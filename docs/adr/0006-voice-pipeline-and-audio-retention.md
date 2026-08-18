@@ -57,6 +57,28 @@ Option B deserves the explicit rejection: the instinct to "keep the flagged ones
 
 A second risk is incomplete deletion: audio surviving in a vendor's systems, a queue, or a temporary buffer. Mitigations: zero-retention vendor configurations verified rather than assumed, the nightly backstop sweep, and a test asserting the artefact is gone after transcription.
 
+## As implemented
+
+The decision above is enforced in three places rather than one, because a single check is a single thing to forget.
+
+**`resolveRetention()`** (`services/voice/src/retention.ts`) is the only function that can decide audio survives a turn, and it requires all three of: `RETENTION_RAW_AUDIO_DAYS > 0`, a live `audio_retention` consent for that specific child, and the artefact being a child upload rather than a synthesised reply. A reader can see every input in one screen.
+
+**`audio_artifacts`** is a ledger, not a store — there is no `bytea` column and there must never be one. `expires_at` is `NOT NULL` with no default, so an artefact that did not state its lifetime cannot be inserted. Parents hold `SELECT` and nothing else: a retention window a user can lengthen is not a retention window.
+
+One correction worth recording: the table originally carried `check (expires_at > created_at)`, which made a lifetime impossible to **shorten**. Revoking consent, responding to an incident, and "delete my child’s recording now" are all "set `expires_at` to the past". The constraint protected nothing and forbade the operation that matters most; it was removed. A test that tried to expire audio early is what found it.
+
+**Expiry is enforced on read**, not only by the sweep. A sweep that has not run yet, or that failed last night, must never be the reason a child’s audio is still served. The sweep reclaims bytes; the read is what enforces the policy.
+
+The retention **decision** is written to the audit log on every voice turn, so "were recordings kept?" is answerable from the audit trail rather than by trusting that a configuration value was what someone said it was.
+
+### What is still open
+
+- The object-store adapter is not written; the in-memory implementation is real (it enforces expiry, sweeps, and bounds itself) but is per-process. Multi-instance deployment needs the durable one.
+- **Vendor-side retention is asserted, not verified.** The Deepgram adapter sends `mip_opt_out` on every request rather than relying on an account setting, which is the right shape — but it is not evidence that no audio is retained anywhere in their infrastructure. That has to be established contractually and confirmed. Until it is, the adapter is not cleared for production traffic.
+- Neither the STT nor the TTS adapter has been exercised against its live API.
+
+---
+
 ## Revisit when
 
 A regulator, or counsel, requires retention for a defined purpose — in which case the scope must be minimised, opt-in, and separately documented. Product convenience is not a trigger.

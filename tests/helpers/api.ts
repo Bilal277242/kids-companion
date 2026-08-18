@@ -1,8 +1,11 @@
 import { fileURLToPath } from 'node:url';
 
 import { PGlite } from '@electric-sql/pglite';
+import type { AIProvider } from '@kids/ai';
 import { parseConfig } from '@kids/config';
 import { applyMigrations, loadMigrations, type Database, type Queryable } from '@kids/db';
+import type { SpeechAnalysisProvider } from '@kids/practice';
+import type { SpeechToTextProvider, TextToSpeechProvider } from '@kids/voice';
 
 import { buildApp, type App } from '../../apps/api/src/app.js';
 
@@ -29,7 +32,8 @@ const MIGRATIONS_DIR = fileURLToPath(new URL('../../infra/migrations/', import.m
  * bug that only appears with a real pool. What they do prove is that the SQL,
  * the identity plumbing, and the policies are correct.
  */
-const pgliteDatabase = (db: PGlite): Database => ({
+/** Exported so a suite can drive a store directly, outside a request. */
+export const pgliteDatabase = (db: PGlite): Database => ({
   query: async (sql, params) => {
     const result = await db.query(sql, params ? [...params] : undefined);
     return { rows: result.rows as never[], rowCount: result.rows.length };
@@ -62,7 +66,23 @@ export interface ApiHarness {
   close(): Promise<void>;
 }
 
-export const createApiHarness = async (): Promise<ApiHarness> => {
+export interface HarnessOptions {
+  /**
+   * Replaces the AI provider.
+   *
+   * The only way to drive a real timeout, a real outage, or a permissive
+   * classifier through the real routes. Tests that need those build their own
+   * harness rather than mutating a shared one.
+   */
+  readonly aiProvider?: AIProvider;
+  readonly sttProvider?: SpeechToTextProvider;
+  readonly ttsProvider?: TextToSpeechProvider;
+  readonly analysisProvider?: SpeechAnalysisProvider;
+  /** Extra config overrides, for limit and rate-limit tests. */
+  readonly env?: Readonly<Record<string, string>>;
+}
+
+export const createApiHarness = async (options: HarnessOptions = {}): Promise<ApiHarness> => {
   const pg = await PGlite.create();
 
   await applyMigrations(
@@ -99,12 +119,23 @@ export const createApiHarness = async (): Promise<ApiHarness> => {
     // it. Raised here so the tests exercise auth rather than the limiter; a
     // dedicated test drives the limiter itself with a low value.
     RATE_LIMIT_AUTH_PER_15_MIN: '10000',
+    // Same reasoning for the conversation limiter: the suite would exhaust the
+    // production value long before it finished exercising the routes. The
+    // limiter itself is driven by a dedicated harness with a low value.
+    RATE_LIMIT_CONVERSATION_PER_MINUTE: '10000',
+    RATE_LIMIT_CONVERSATION_START_PER_HOUR: '10000',
+    RATE_LIMIT_VOICE_PER_MINUTE: '10000',
+    ...options.env,
   });
 
   const app = await buildApp({
     config,
     db: pgliteDatabase(pg),
     now: () => current,
+    ...(options.aiProvider ? { aiProvider: options.aiProvider } : {}),
+    ...(options.sttProvider ? { sttProvider: options.sttProvider } : {}),
+    ...(options.ttsProvider ? { ttsProvider: options.ttsProvider } : {}),
+    ...(options.analysisProvider ? { analysisProvider: options.analysisProvider } : {}),
   });
   await app.ready();
 

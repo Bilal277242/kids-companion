@@ -1,11 +1,130 @@
 /**
- * @kids/ai — conversation generation and safety classification.
+ * @kids/ai — the conversation engine, behind a provider-independent port.
  *
- * Phase 2 delivers: adapters (Anthropic + mock), the versioned prompt registry,
- * age-band adaptation, the L1–L5 safety chain, and per-turn cost accounting.
+ * No vendor SDK type crosses this package's boundary. Swapping providers is a
+ * configuration change plus one adapter file (docs/adr/0004).
  *
- * The mock adapter is the default in `local` and `ci`, so a fresh clone runs the
- * full loop with no API keys.
+ * The mock provider is the default in `local` and `ci`, so the whole loop runs
+ * with no API key and no spend.
  */
 
-export type * from './ports.js';
+export type {
+  AIProvider,
+  DetectLanguageRequest,
+  DetectLanguageResult,
+  GenerateRequest,
+  GenerateResult,
+  ModerationCategory,
+  ModerationRequest,
+  ModerationResult,
+  ProviderContext,
+  ProviderMessage,
+  StructuredRequest,
+  StructuredResult,
+  TokenUsage,
+} from './ports.js';
+export { MODERATION_CATEGORIES } from './ports.js';
+
+export {
+  INVARIANTS,
+  REDIRECTION_GUIDANCE,
+  rulesFor,
+  SENSITIVE_TOPIC_GUIDANCE,
+  type AgeRules,
+} from './age-rules.js';
+
+export {
+  allCharacters,
+  characterByKey,
+  characterBySlug,
+  characterFromConfig,
+  isCharacterAllowedFor,
+  resolveCharacter,
+  type CharacterConfig,
+  type CharacterDefinition,
+} from './characters.js';
+
+export {
+  assertTraitsAreManner,
+  CAPABILITY_LANGUAGE,
+  CONVERSATION_PROSE,
+  CONVERSATION_STYLES,
+  ENCOURAGEMENT_PROSE,
+  ENCOURAGEMENT_STYLES,
+  FAREWELL_PROSE,
+  FAREWELL_STYLES,
+  GREETING_PROSE,
+  GREETING_STYLES,
+  isConversationStyle,
+  isEncouragementStyle,
+  isFarewellStyle,
+  isGreetingStyle,
+  isPersonalityTrait,
+  isStoryStyle,
+  isVocabularyStyle,
+  PERSONALITY_PROSE,
+  PERSONALITY_TRAITS,
+  STORY_PROSE,
+  STORY_STYLES,
+  VOCABULARY_PROSE,
+  VOCABULARY_STYLES,
+  type ConversationStyle,
+  type EncouragementStyle,
+  type FarewellStyle,
+  type GreetingStyle,
+  type PersonalityTrait,
+  type StoryStyle,
+  type VocabularyStyle,
+} from './character-traits.js';
+
+export {
+  assertInvariantsPresent,
+  buildSystemPrompt,
+  NAME_PLACEHOLDER,
+  substituteName,
+  type PromptInputs,
+} from './prompts.js';
+
+export {
+  assertNoProhibitedData,
+  buildProviderContext,
+  DEFAULT_CONTEXT_LIMITS,
+  estimateTokens,
+  outputTokensFor,
+  ProhibitedDataError,
+  windowHistory,
+  type ContextLimits,
+  type ConversationContextInput,
+  type HistoryMessage,
+  type WindowedHistory,
+} from './context.js';
+
+/**
+ * The safety layer lives in `@kids/safety` and is re-exported here ONLY as an
+ * adapter. Anything reaching for safety behaviour should import that package
+ * directly — it is independent of this one, and depends on nothing in it.
+ */
+export { providerAsClassifier } from './safety-classifier.js';
+
+/**
+ * Resilience primitives moved to `@kids/shared` — the AI, STT, and TTS adapters
+ * all need them, and three copies of a retry budget is three places for it to
+ * drift. Import them from there.
+ */
+
+export {
+  createMockProvider,
+  type MockBehaviour,
+  type MockProviderOptions,
+} from './mock-provider.js';
+export { createAnthropicProvider, type AnthropicProviderOptions } from './anthropic-provider.js';
+
+export {
+  createConversationEngine,
+  type ConversationEngine,
+  type EngineOptions,
+  type RespondInput,
+  type SafetyRecord,
+  type TurnResult,
+  type TurnStatus,
+} from './engine.js';

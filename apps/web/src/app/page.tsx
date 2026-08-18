@@ -1,30 +1,20 @@
-import { colors, spacing } from '@kids/ui';
+import { redirect } from 'next/navigation';
+
+import { readSession } from '../lib/session';
 
 /**
- * Foundation placeholder. The parent dashboard lands in Phase 5.
+ * The front door.
  *
- * It exists now to prove the build pipeline end to end: Next.js compiles, the
- * shared `@kids/ui` package resolves across the workspace boundary, and design
- * tokens are consumed from one source rather than redefined per app.
+ * There is no marketing page here yet and no child experience on the web at all,
+ * so `/` is a decision rather than a destination: a signed-in parent goes to
+ * their dashboard, everyone else goes to sign in.
+ *
+ * Dynamic because it reads a cookie. Rendering this at build time would send
+ * every visitor to whichever branch happened to be true when it was built.
  */
-export default function HomePage() {
-  return (
-    <main
-      style={{
-        padding: spacing.xl,
-        fontFamily: 'system-ui, sans-serif',
-        color: colors.text,
-        background: colors.surface,
-        minHeight: '100vh',
-      }}
-    >
-      <h1 style={{ marginBottom: spacing.sm }}>kids-companion</h1>
-      <p style={{ color: colors.textMuted, marginBottom: spacing.lg }}>
-        Parent dashboard — foundation only. No features are implemented yet.
-      </p>
-      <p style={{ color: colors.textMuted, fontSize: 14 }}>
-        See <code>DEVELOPMENT_PLAN.md</code> for what ships in Phase 5.
-      </p>
-    </main>
-  );
+export const dynamic = 'force-dynamic';
+
+export default async function HomePage() {
+  const session = await readSession();
+  redirect(session ? '/dashboard' : '/login');
 }

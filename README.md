@@ -16,16 +16,17 @@ Initial market: Pakistan. Then international.
 
 Read in this order. The first four are prerequisites for writing any code in this repository.
 
-| #   | Document                                         | What it answers                                    |
-| --- | ------------------------------------------------ | -------------------------------------------------- |
-| 1   | [ARCHITECTURE.md](ARCHITECTURE.md)               | How the system is shaped, and why                  |
-| 2   | [docs/CHILD_SAFETY.md](docs/CHILD_SAFETY.md)     | The safety requirements every feature must satisfy |
-| 3   | [PRIVACY.md](PRIVACY.md)                         | What data we collect, why, and for how long        |
-| 4   | [SECURITY.md](SECURITY.md)                       | Threat model and security requirements             |
-| 5   | [docs/DATA_MODEL.md](docs/DATA_MODEL.md)         | The schema, and what it refuses to do              |
-| 5   | [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md)       | Phases, gates, and the risk register               |
-| 6   | [docs/OPEN_QUESTIONS.md](docs/OPEN_QUESTIONS.md) | What is deliberately not decided yet               |
-| 7   | [CONTRIBUTING.md](CONTRIBUTING.md)               | How to work in this repo                           |
+| #   | Document                                             | What it answers                                                           |
+| --- | ---------------------------------------------------- | ------------------------------------------------------------------------- |
+| 1   | [ARCHITECTURE.md](ARCHITECTURE.md)                   | How the system is shaped, and why                                         |
+| 2   | [docs/CHILD_SAFETY.md](docs/CHILD_SAFETY.md)         | The safety requirements every feature must satisfy                        |
+| 2a  | [docs/SAFETY_SUBSYSTEM.md](docs/SAFETY_SUBSYSTEM.md) | How those requirements are enforced — and what that enforcement cannot do |
+| 3   | [PRIVACY.md](PRIVACY.md)                             | What data we collect, why, and for how long                               |
+| 4   | [SECURITY.md](SECURITY.md)                           | Threat model and security requirements                                    |
+| 5   | [docs/DATA_MODEL.md](docs/DATA_MODEL.md)             | The schema, and what it refuses to do                                     |
+| 5   | [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md)           | Phases, gates, and the risk register                                      |
+| 6   | [docs/OPEN_QUESTIONS.md](docs/OPEN_QUESTIONS.md)     | What is deliberately not decided yet                                      |
+| 7   | [CONTRIBUTING.md](CONTRIBUTING.md)                   | How to work in this repo                                                  |
 
 Conventions: [coding](docs/CODING_STANDARDS.md) · [testing](docs/TESTING_STANDARDS.md) · [API](docs/API_CONVENTIONS.md) · [database](docs/DATABASE_CONVENTIONS.md) · [errors](docs/ERROR_HANDLING.md) · [logging](docs/LOGGING.md) · [environment](docs/ENVIRONMENT.md) · [ADRs](docs/adr/)
 

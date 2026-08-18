@@ -69,6 +69,12 @@ child utterance
 
 **L4 is not redundant with L1 and L3.** Those are both models and share a failure mode: an input crafted to fool one often fools the other. A deterministic filter fails differently, which is the entire point of having it.
 
+### 3.1 As implemented
+
+The layers above are delivered as three named stages — `INPUT_SAFETY_CHECK`, `AI_GENERATION`, `OUTPUT_SAFETY_CHECK` — in `@kids/safety`, a package that is independent of the conversation logic it guards and imports nothing from it.
+
+**[SAFETY_SUBSYSTEM.md](SAFETY_SUBSYSTEM.md) is the implementation reference**, including the harm taxonomy, the configurable policy table, the escalation rules, and — in its §9 — the specific things this machinery cannot do. Read that §9 before quoting any number from this system.
+
 ---
 
 ## 4. Content policy by age band
@@ -188,7 +194,7 @@ Safety classification quality drops sharply outside English, and Pakistani house
 
 ## 11. What we cannot promise
 
-- **We cannot guarantee an unsafe output never reaches a child.** The pipeline reduces probability; it does not eliminate it. Anyone who claims otherwise about an LLM product is wrong, and the entire operational apparatus in §10 exists because the residual risk is permanent.
+- **We cannot guarantee an unsafe output never reaches a child.** The pipeline reduces probability; it does not eliminate it. Anyone who claims otherwise about an LLM product is wrong, and the entire operational apparatus in §10 exists because the residual risk is permanent. The implemented limitations are enumerated individually in [SAFETY_SUBSYSTEM.md §9](SAFETY_SUBSYSTEM.md#9-known-limitations-).
 - **We cannot verify a child's age**, or that the account holder is their parent.
 - **We cannot protect a child from a hostile adult in their own household** ([SECURITY.md §10](../SECURITY.md)).
 - **We cannot replace human relationships**, and must not be designed to. A product a child prefers to their parents has failed, however good its engagement metrics look.

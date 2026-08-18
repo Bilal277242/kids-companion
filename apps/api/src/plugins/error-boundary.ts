@@ -1,4 +1,10 @@
-import { redactObject, toAppError, validationFailed, type ValidationDetail } from '@kids/shared';
+import {
+  rateLimited,
+  redactObject,
+  toAppError,
+  validationFailed,
+  type ValidationDetail,
+} from '@kids/shared';
 import type { FastifyPluginAsync } from 'fastify';
 import fp from 'fastify-plugin';
 
@@ -62,6 +68,15 @@ const validationDetailsOf = (error: unknown): ValidationDetail[] => {
   });
 };
 
+/** Reads back the `retry-after` the limiter already set, so the body agrees with the header. */
+const retryAfterSecondsOf = (reply: {
+  getHeader: (name: string) => unknown;
+}): number | undefined => {
+  const header = reply.getHeader('retry-after');
+  const seconds = Number(header);
+  return Number.isFinite(seconds) && seconds > 0 ? seconds : undefined;
+};
+
 const errorBoundaryPlugin: FastifyPluginAsync = async (app) => {
   app.setErrorHandler((error, request, reply) => {
     // The presence of `error.validation` is what makes it a schema rejection —
@@ -72,7 +87,19 @@ const errorBoundaryPlugin: FastifyPluginAsync = async (app) => {
     const isSchemaRejection = Array.isArray((error as { validation?: unknown }).validation);
     const details: ValidationDetail[] = isSchemaRejection ? validationDetailsOf(error) : [];
 
-    const appError = isSchemaRejection ? validationFailed(details, error) : toAppError(error);
+    // @fastify/rate-limit throws rather than replying, and an unrecognised throw
+    // becomes INTERNAL_ERROR — which turned every limiter rejection into a 500
+    // that told the client to retry harder. Recognised explicitly here so the
+    // limiter produces the same envelope as everything else.
+    const status = (error as { statusCode?: unknown }).statusCode;
+    const isRateLimitRejection =
+      status === 429 || (error as { code?: unknown }).code === 'FST_ERR_RATE_LIMIT';
+
+    const appError = isSchemaRejection
+      ? validationFailed(details, error)
+      : isRateLimitRejection
+        ? rateLimited(retryAfterSecondsOf(reply))
+        : toAppError(error);
 
     // Context is developer-authored and therefore the most likely place for a
     // sensitive field to be added without thinking. Redact before it reaches a log.

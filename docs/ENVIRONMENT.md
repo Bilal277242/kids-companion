@@ -119,35 +119,49 @@ Legend: **Req** = required in production · **Secret** = never in a file, never 
 
 ### AI
 
-| Variable                        | Req | Secret | Default | Notes                                                                          |
-| ------------------------------- | :-: | :----: | ------- | ------------------------------------------------------------------------------ |
-| `AI_PROVIDER`                   |  ✓  |        | `mock`  | `mock` in local and CI so no key is needed                                     |
-| `AI_MODEL_CONVERSATION`         |  ✓  |        | —       | Pinned. Never a floating alias — a silent model swap is a silent safety change |
-| `AI_MODEL_SAFETY_CLASSIFIER`    |  ✓  |        | —       | Small/fast; runs on every turn in both directions                              |
-| `AI_MAX_OUTPUT_TOKENS`          |     |        | `512`   | Cost and turn-length control                                                   |
-| `AI_TEMPERATURE`                |     |        | `0.7`   |                                                                                |
-| `AI_REQUEST_TIMEOUT_MS`         |     |        | `15000` | Bounded by the voice-loop budget                                               |
-| `AI_MAX_RETRIES`                |     |        | `2`     | Subject to the retry budget ([ERROR_HANDLING.md §7](ERROR_HANDLING.md))        |
-| `ANTHROPIC_API_KEY`             |     |   ✓    | —       | Required when `AI_PROVIDER=anthropic`                                          |
-| `OPENAI_API_KEY`                |     |   ✓    | —       | Required when `AI_PROVIDER=openai`                                             |
-| `AI_DAILY_COST_CEILING_USD`     |  ✓  |        | `50`    | Hard guard. On trip, degrade — never serve an unbounded bill                   |
-| `AI_PER_CHILD_DAILY_TURN_LIMIT` |  ✓  |        | `300`   | Abuse and runaway-loop guard                                                   |
+| Variable                        | Req | Secret | Default | Notes                                                                                                                                             |
+| ------------------------------- | :-: | :----: | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `AI_PROVIDER`                   |  ✓  |        | `mock`  | `mock` in local and CI so no key is needed                                                                                                        |
+| `AI_MODEL_CONVERSATION`         |  ✓  |        | —       | Pinned. Never a floating alias — a silent model swap is a silent safety change                                                                    |
+| `AI_MODEL_SAFETY_CLASSIFIER`    |  ✓  |        | —       | Small/fast; runs on every turn in both directions                                                                                                 |
+| `AI_MAX_OUTPUT_TOKENS`          |     |        | `512`   | Cost and turn-length control                                                                                                                      |
+| `AI_TEMPERATURE`                |     |        | `0.7`   |                                                                                                                                                   |
+| `AI_REQUEST_TIMEOUT_MS`         |     |        | `15000` | Bounded by the voice-loop budget                                                                                                                  |
+| `AI_MODERATION_TIMEOUT_MS`      |     |        | `4000`  | Runs twice per turn, on input and output. A timeout here BLOCKS the turn — fail closed                                                            |
+| `AI_CONTEXT_MAX_EXCHANGES`      |     |        | `10`    | History window, in exchanges (one child message + one reply). The specification calls for ~10; configurable because the right number is empirical |
+| `AI_CONTEXT_MAX_HISTORY_TOKENS` |     |        | `2000`  | Second bound on the window. Whichever limit bites first wins                                                                                      |
+| `AI_TEMPERATURE`                |     |        | `0.7`   | Conversation only. Classification always runs at 0                                                                                                |
+| `AI_MAX_RETRIES`                |     |        | `2`     | Subject to the retry budget ([ERROR_HANDLING.md §7](ERROR_HANDLING.md))                                                                           |
+| `ANTHROPIC_API_KEY`             |     |   ✓    | —       | Required when `AI_PROVIDER=anthropic`                                                                                                             |
+| `OPENAI_API_KEY`                |     |   ✓    | —       | Required when `AI_PROVIDER=openai`                                                                                                                |
+| `AI_DAILY_COST_CEILING_USD`     |  ✓  |        | `50`    | Hard guard. On trip, degrade — never serve an unbounded bill                                                                                      |
+| `AI_PER_CHILD_DAILY_TURN_LIMIT` |  ✓  |        | `300`   | Abuse and runaway-loop guard                                                                                                                      |
 
 ### Voice
 
-| Variable                                   | Req | Secret | Default       | Notes                                                                                   |
-| ------------------------------------------ | :-: | :----: | ------------- | --------------------------------------------------------------------------------------- |
-| `STT_PROVIDER`                             |  ✓  |        | `mock`        | Vendor undecided — [Q-01](OPEN_QUESTIONS.md)                                            |
-| `STT_MODEL`                                |     |        | —             |                                                                                         |
-| `STT_LANGUAGE_HINTS`                       |  ✓  |        | `en-US,ur-PK` | Constrained hypothesis set, not autodetect ([ARCHITECTURE.md §7.2](../ARCHITECTURE.md)) |
-| `STT_TIMEOUT_MS`                           |     |        | `10000`       |                                                                                         |
-| `DEEPGRAM_API_KEY`                         |     |   ✓    | —             |                                                                                         |
-| `GOOGLE_APPLICATION_CREDENTIALS_JSON`      |     |   ✓    | —             | Base64 of the JSON — never a file path in a container                                   |
-| `AZURE_SPEECH_KEY` / `AZURE_SPEECH_REGION` |     |   ✓    | —             |                                                                                         |
-| `TTS_PROVIDER`                             |  ✓  |        | `mock`        |                                                                                         |
-| `TTS_TIMEOUT_MS`                           |     |        | `10000`       |                                                                                         |
-| `TTS_CACHE_TTL_SECONDS`                    |     |        | `604800`      | **The single biggest cost lever** — stock phrases repeat constantly                     |
-| `ELEVENLABS_API_KEY`                       |     |   ✓    | —             |                                                                                         |
+| Variable                                   | Req | Secret | Default       | Notes                                                                                     |
+| ------------------------------------------ | :-: | :----: | ------------- | ----------------------------------------------------------------------------------------- |
+| `STT_PROVIDER`                             |  ✓  |        | `mock`        | Vendor undecided — [Q-01](OPEN_QUESTIONS.md)                                              |
+| `STT_MODEL`                                |     |        | —             |                                                                                           |
+| `STT_LANGUAGE_HINTS`                       |  ✓  |        | `en-US,ur-PK` | Constrained hypothesis set, not autodetect ([ARCHITECTURE.md §7.2](../ARCHITECTURE.md))   |
+| `STT_TIMEOUT_MS`                           |     |        | `10000`       |                                                                                           |
+| `VOICE_MAX_UPLOAD_BYTES`                   |     |        | `8388608`     | Enforced as the body streams, not after buffering                                         |
+| `VOICE_MAX_DURATION_MS`                    |     |        | `30000`       | Read from the container, never from a client-reported value                               |
+| `VOICE_MIN_DURATION_MS`                    |     |        | `250`         | Below this there is nothing to transcribe                                                 |
+| `VOICE_ALLOW_UNKNOWN_DURATION`             |     |        | `true`        | Browser WebM has no duration until finalised; false makes the duration limit load-bearing |
+| `VOICE_MIN_CONFIDENCE`                     |     |        | `0.4`         | Below this the child is asked to repeat rather than answered                              |
+| `VOICE_TRANSIENT_AUDIO_SECONDS`            |     |        | `300`         | How long reply audio stays fetchable. A timeout, not a retention period                   |
+| `SPEECH_ANALYSIS_PROVIDER`                 |     |        | `mock`        | `transcription` scores from a transcript and cannot see phonemes (Q-06)                   |
+| `SPEECH_ANALYSIS_TIMEOUT_MS`               |     |        | `10000`       |                                                                                           |
+| `RATE_LIMIT_PRACTICE_PER_MINUTE`           |     |        | `30`          |                                                                                           |
+| `RATE_LIMIT_VOICE_PER_MINUTE`              |     |        | `15`          | Lower than text: each turn costs an STT call and a TTS call                               |
+| `DEEPGRAM_API_KEY`                         |     |   ✓    | —             |                                                                                           |
+| `GOOGLE_APPLICATION_CREDENTIALS_JSON`      |     |   ✓    | —             | Base64 of the JSON — never a file path in a container                                     |
+| `AZURE_SPEECH_KEY` / `AZURE_SPEECH_REGION` |     |   ✓    | —             |                                                                                           |
+| `TTS_PROVIDER`                             |  ✓  |        | `mock`        |                                                                                           |
+| `TTS_TIMEOUT_MS`                           |     |        | `10000`       |                                                                                           |
+| `TTS_CACHE_TTL_SECONDS`                    |     |        | `604800`      | **The single biggest cost lever** — stock phrases repeat constantly                       |
+| `ELEVENLABS_API_KEY`                       |     |   ✓    | —             |                                                                                           |
 
 ### Safety
 
@@ -192,12 +206,13 @@ Legend: **Req** = required in production · **Secret** = never in a file, never 
 
 ### Rate limiting
 
-| Variable                             | Req | Secret | Default | Notes                           |
-| ------------------------------------ | :-: | :----: | ------- | ------------------------------- |
-| `RATE_LIMIT_GLOBAL_PER_MINUTE`       |     |        | `600`   |                                 |
-| `RATE_LIMIT_AUTH_PER_15_MIN`         |     |        | `10`    | Strictest — credential stuffing |
-| `RATE_LIMIT_CONVERSATION_PER_MINUTE` |     |        | `30`    | Also a runaway-cost guard       |
-| `RATE_LIMIT_UPLOAD_PER_MINUTE`       |     |        | `20`    |                                 |
+| Variable                                 | Req | Secret | Default | Notes                                             |
+| ---------------------------------------- | :-: | :----: | ------- | ------------------------------------------------- |
+| `RATE_LIMIT_GLOBAL_PER_MINUTE`           |     |        | `600`   |                                                   |
+| `RATE_LIMIT_AUTH_PER_15_MIN`             |     |        | `10`    | Strictest — credential stuffing                   |
+| `RATE_LIMIT_CONVERSATION_PER_MINUTE`     |     |        | `30`    | Also a runaway-cost guard                         |
+| `RATE_LIMIT_CONVERSATION_START_PER_HOUR` |     |        | `30`    | Starting sessions is rare; looping on it is a bug |
+| `RATE_LIMIT_UPLOAD_PER_MINUTE`           |     |        | `20`    |                                                   |
 
 ### Observability
 

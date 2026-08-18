@@ -342,29 +342,29 @@ describe('child profiles', () => {
     };
 
     it('accepts a character offered for the age group and language', async () => {
-      const pip = await characterBySlug('pip-the-fox');
-      const response = await createChild(alice, { birthYear: 2021, preferredCharacterId: pip });
+      const lily = await characterBySlug('lily-the-fairy');
+      const response = await createChild(alice, { birthYear: 2021, preferredCharacterId: lily });
 
       expect(response.statusCode).toBe(201);
-      expect(response.json().preferredCharacterId).toBe(pip);
+      expect(response.json().preferredCharacterId).toBe(lily);
     });
 
     it('rejects a character not offered for the age group', async () => {
-      // captain-zia is AGE_6_8/AGE_9_10 only: sustained narrative and mild story
+      // Captain Sky is AGE_6_8/AGE_9_10 only: sustained narrative and mild story
       // tension do not suit a three-year-old.
-      const zia = await characterBySlug('captain-zia');
-      const response = await createChild(alice, { birthYear: 2022, preferredCharacterId: zia });
+      const captain = await characterBySlug('captain-sky');
+      const response = await createChild(alice, { birthYear: 2022, preferredCharacterId: captain });
 
       expect(response.statusCode).toBe(400);
       expect(JSON.stringify(response.json())).toContain('age group');
     });
 
     it("rejects a character that speaks none of the child's languages", async () => {
-      const nano = await characterBySlug('nano-the-robot'); // English only
+      const owl = await characterBySlug('professor-owl'); // English only
       const response = await createChild(alice, {
         birthYear: 2019,
         languages: [{ languageCode: 'ur', isPrimary: true }],
-        preferredCharacterId: nano,
+        preferredCharacterId: owl,
       });
 
       expect(response.statusCode).toBe(400);
@@ -372,10 +372,10 @@ describe('child profiles', () => {
     });
 
     it("clears a character that no longer speaks the child's languages", async () => {
-      const nano = await characterBySlug('nano-the-robot');
-      const created = await createChild(alice, { birthYear: 2019, preferredCharacterId: nano });
+      const owl = await characterBySlug('professor-owl');
+      const created = await createChild(alice, { birthYear: 2019, preferredCharacterId: owl });
       const childId = created.json<{ id: string }>().id;
-      expect(created.json().preferredCharacterId).toBe(nano);
+      expect(created.json().preferredCharacterId).toBe(owl);
 
       const switched = await harness.app.inject({
         method: 'PUT',
