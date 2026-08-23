@@ -3,7 +3,7 @@
 **Date:** 2026-08-23
 **Lenses:** product engineering, UX, security, QA.
 **Scope:** nineteen review areas, nine removal categories.
-**Changes made:** two fixes, two dependencies removed, eleven tests added.
+**Changes made:** three fixes, two dependencies removed, eleven tests added.
 Complete suite run after each. **1,461 passing, 5 skipped, 0 failing.**
 
 ---
@@ -35,11 +35,11 @@ Fixed, with four regression tests. Details in F-01.
 | Child experience        | **Fixed** | Voice playback was broken (F-01). Otherwise strong                       |
 | Parent experience       | Good      | Consistent, explained, no dark patterns                                  |
 | Navigation              | Good      | One nav, same shape on every page                                        |
-| Accessibility           | **Fixed** | Field hints were unannounced (F-02)                                      |
+| Accessibility           | **Fixed** | Field hints unannounced (F-02); Reduce Motion ignored on mobile (F-04)   |
 | Loading states          | Good      | Every page has one, shaped like its content                              |
 | Empty states            | Good      | Say _why_ it is empty and what fills it                                  |
 | Error states            | Good      | Never render the error object                                            |
-| Animations              | Good      | Durations chosen and justified                                           |
+| Animations              | **Fixed** | Looped regardless of the Reduce Motion setting (F-04)                    |
 | Voice interaction       | **Fixed** | See F-01                                                                 |
 | AI responses            | Good      | Safety-gated, name-substituted at read time                              |
 | Character experience    | Good      | Faces and colour for pre-readers                                         |
@@ -161,6 +161,58 @@ not the same as "unused". Two of the three candidates were genuinely dead; the
 third was load-bearing and invisible. `react-dom` in `apps/web` was kept for the
 same class of reason — Next requires it at runtime with no explicit import — so
 the scan's false-positive rate here was one in four.
+
+### F-04 · The child's app ignored "Reduce Motion" · **accessibility**
+
+**Area:** accessibility, animations, child experience.
+
+Found on a second pass, going back over the areas the first pass had judged
+structurally rather than by reading.
+
+The dashboard honours `prefers-reduced-motion` in `globals.css`. **The mobile
+app honoured nothing.** It runs two continuous loops:
+
+| Loop              | When               | What it does                                    |
+| ----------------- | ------------------ | ----------------------------------------------- |
+| Talk button pulse | while listening    | scales a 168pt button, 1.4 s per cycle, forever |
+| Character bob     | **always visible** | translates the avatar, faster while speaking    |
+
+Constant motion is a problem for vestibular sensitivity, and it is a problem for
+autistic children — who are a real part of the audience for a patient,
+repetitive conversation partner, not an edge case to handle later. Both
+platforms expose the setting and expect an app to honour it.
+
+**Fix.** A `useReducedMotion()` hook reading `AccessibilityInfo`, subscribed to
+changes because someone turning the setting on mid-session is usually someone
+who has just been made uncomfortable. Both loops hold still when it is on.
+
+**Nothing is lost by stopping.** Every state the motion reinforced is carried
+elsewhere: the talk button changes colour, emoji **and** label; the character's
+speaking state is in its accessibility label and, more to the point, in the
+audio that is playing. The motion was decoration on top of signals that already
+existed — which is exactly the test for whether it is safe to remove.
+
+Defaults to motion-on, because the read is asynchronous: briefly animating for
+someone who asked for stillness is a smaller wrong than permanently freezing the
+interface for everyone if the query fails.
+
+---
+
+## Second pass: the areas judged structurally, read properly
+
+The first pass marked several areas "Good" on structural evidence — shared
+component usage, presence of loading and error files, state coverage. That is
+weak evidence about a _flow_. Re-reading them end to end found F-04 and
+confirmed the rest.
+
+| Area              | What the closer read found                                                                                                                                                                                    |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Subscription      | Cancel is **one click, no confirmation, and reversible** — with copy that says what keeps working and until when. No retention offer, no guilt, no maze. Correct.                                             |
+| Account deletion  | Requires the password again, because "a session is not enough to start something irreversible". Failure copy says _"Nothing has been deleted."_                                                               |
+| Friction symmetry | Cancelling is easy and undoable; deleting is hard and permanent. The friction matches the consequence in both directions, which is design rather than accident.                                               |
+| Progress charts   | Inline SVG, and **every chart ships a visually hidden table with the real numbers** — the chart is decoration, the table is the content. Bars are zero-baselined, so no truncated axis flatters a quiet week. |
+| Onboarding        | The parent area is a **deliberate dead end** in child mode: no password field exists there at all. A child who wanders in cannot do anything and is not made to feel they did something wrong.                |
+| Consent           | Versioned, per-child, enforced by RLS rather than by a checkbox.                                                                                                                                              |
 
 ---
 

@@ -11,6 +11,7 @@ import {
   type ViewStyle,
 } from 'react-native';
 
+import { useReducedMotion } from '../hooks/reduced-motion.js';
 import { characterColour, characterFace, childTheme } from '../theme/child-theme.js';
 
 /**
@@ -139,9 +140,11 @@ export const TalkButton = ({
   testID?: string;
 }) => {
   const pulse = useRef(new Animated.Value(1)).current;
+  const reducedMotion = useReducedMotion();
 
   useEffect(() => {
-    if (!listening) {
+    // Colour, emoji and label all still change, so stillness costs no meaning.
+    if (!listening || reducedMotion) {
       pulse.setValue(1);
       return;
     }
@@ -166,7 +169,7 @@ export const TalkButton = ({
     return () => {
       loop.stop();
     };
-  }, [listening, pulse]);
+  }, [listening, pulse, reducedMotion]);
 
   return (
     <Animated.View style={{ transform: [{ scale: pulse }] }}>
@@ -214,8 +217,17 @@ export const CharacterAvatar = ({
   testID?: string;
 }) => {
   const bob = useRef(new Animated.Value(0)).current;
+  const reducedMotion = useReducedMotion();
 
   useEffect(() => {
+    /* Held still rather than looped. That the friend is talking is already in
+     * the accessibility label and in the audio that is playing — the bob only
+     * ever reinforced it. */
+    if (reducedMotion) {
+      bob.setValue(0);
+      return;
+    }
+
     const loop = Animated.loop(
       Animated.sequence([
         Animated.timing(bob, {
@@ -236,7 +248,7 @@ export const CharacterAvatar = ({
     return () => {
       loop.stop();
     };
-  }, [bob, speaking]);
+  }, [bob, speaking, reducedMotion]);
 
   const translateY = bob.interpolate({ inputRange: [0, 1], outputRange: [0, speaking ? -10 : -4] });
 
