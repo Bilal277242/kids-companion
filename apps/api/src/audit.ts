@@ -61,6 +61,51 @@ export const AUDIT_ACTIONS = [
   // Parental controls. "Who loosened this, and when?" has to be answerable.
   'parental_controls.updated',
   'conversation.parental_limit_reached',
+
+  // Billing. A subscription changing state is a financial event, and the
+  // question "who did this — the parent, or a webhook?" must be answerable
+  // long after the fact.
+  'subscription.checkout.opened',
+  'subscription.activated',
+  'subscription.renewed',
+  'subscription.payment_failed',
+  'subscription.grace_started',
+  'subscription.cancel_requested',
+  'subscription.cancelled',
+  'subscription.resume_requested',
+  'subscription.resumed',
+  'subscription.expired',
+  'subscription.refunded',
+  'webhook.received',
+  'webhook.rejected',
+  'webhook.replayed',
+
+  // Payments. Separate from the subscription actions above, because they
+  // answer a different question: "did money move?", not "what is this family
+  // entitled to?".
+  'payment.initiated',
+  'payment.captured',
+  'payment.failed',
+  'payment.cancelled',
+  'payment.unresolved',
+  'payment.reconciled',
+  'payment.refund_requested',
+  'payment.refund_succeeded',
+  'payment.refund_refused',
+  'payment.rail_unavailable',
+
+  // Mobile store billing. Separate again: a store owns the subscription and we
+  // mirror it, so these record what the STORE said and what we did about it —
+  // never what a device claimed.
+  'store.purchase.verified',
+  'store.purchase.not_entitled',
+  'store.purchase.rejected',
+  // The same purchase presented under two accounts. Recorded with both parent
+  // ids, because one purchase attempted by a dozen accounts is a very different
+  // thing from a family reinstalling on a second device.
+  'store.purchase.conflict',
+  'store.purchases.restored',
+  'store.subscription.synchronised',
 ] as const;
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
 

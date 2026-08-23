@@ -233,7 +233,31 @@ describe('the voice API', () => {
 
     it('never returns a storage credential, bucket, or provider name', async () => {
       const response = await speak(alice, aliceConversationId, silentWav(1_000));
-      const serialised = JSON.stringify(response.json()).toLowerCase();
+
+      /**
+       * ═══════════════════════════════════════════════════════════════════
+       * THE AUDIO KEY IS EXCLUDED, AND NOT BECAUSE IT IS INCONVENIENT.
+       * ═══════════════════════════════════════════════════════════════════
+       *
+       * `key` is an opaque handle — 24 random bytes, base64url — and it is
+       * SUPPOSED to be in this response. Scanning it for two-character
+       * substrings tests the random number generator, not the API.
+       *
+       * This assertion used to include it, and failed intermittently on a key
+       * that happened to contain "s3":
+       *
+       *   "key":"8ekjchl14c9s3zwtap_1zzmr3lkutqkc"
+       *
+       * Roughly a one-in-a-hundred chance per run — often enough to make the
+       * pipeline untrustworthy, rare enough to be dismissed as "just CI". Found
+       * by running the suite from a clean checkout twice.
+       *
+       * Every other field stays under scrutiny. The key carries nothing to
+       * leak; the fields around it are the ones that could.
+       */
+      const serialised = JSON.stringify(response.json(), (field, value) =>
+        field === 'key' ? '<opaque-handle>' : (value as unknown),
+      ).toLowerCase();
 
       for (const forbidden of [
         'http://',

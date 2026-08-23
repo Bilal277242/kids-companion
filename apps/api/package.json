@@ -10,7 +10,9 @@
     "build": "tsc -b",
     "start": "node dist/server.js",
     "clean": "rimraf dist *.tsbuildinfo",
-    "test": "vitest run --project unit --passWithNoTests"
+    "test": "vitest run --project unit --passWithNoTests",
+    "dev:worker": "tsx watch src/worker.ts",
+    "start:worker": "node dist/worker.js"
   },
   "dependencies": {
     "@fastify/cors": "^11.3.0",
@@ -18,12 +20,13 @@
     "@fastify/multipart": "^10.1.1",
     "@fastify/rate-limit": "^11.2.0",
     "@fastify/swagger": "^9.8.1",
-    "@fastify/under-pressure": "^9.1.0",
     "@kids/ai": "workspace:*",
+    "@kids/analytics": "workspace:*",
     "@kids/auth": "workspace:*",
     "@kids/config": "workspace:*",
     "@kids/db": "workspace:*",
     "@kids/learning": "workspace:*",
+    "@kids/payments": "workspace:*",
     "@kids/practice": "workspace:*",
     "@kids/safety": "workspace:*",
     "@kids/shared": "workspace:*",
@@ -34,7 +37,6 @@
     "fastify": "^5.12.0",
     "fastify-plugin": "^6.0.0",
     "fastify-type-provider-zod": "^7.0.0",
-    "openapi-types": "^12.1.3",
     "pino": "catalog:",
     "zod": "catalog:"
   },

@@ -43,14 +43,66 @@ describe('API integration', () => {
   });
 
   describe('GET /ready', () => {
-    it('reports unrun checks as skipped rather than ok', async () => {
+    it('probes the database and reports an unconfigured dependency as skipped', async () => {
       const response = await app.inject({ method: 'GET', url: '/ready' });
 
       expect(response.statusCode).toBe(200);
       expect(response.json()).toMatchObject({
         status: 'ready',
-        checks: { database: 'skipped', redis: 'skipped' },
+        // The database is real here and answers. Redis is not configured in this
+        // harness, and `skipped` says so rather than claiming a check that never
+        // ran — an unexamined dependency is not a healthy one.
+        checks: { database: 'ok', redis: 'skipped' },
       });
+    });
+
+    /**
+     * ═══════════════════════════════════════════════════════════════════════
+     * THE ANSWER READINESS EXISTS TO GIVE.
+     * ═══════════════════════════════════════════════════════════════════════
+     *
+     * A readiness endpoint that has only ever been observed returning 200 is
+     * indistinguishable from one hard-coded to return 200, and the difference
+     * only shows up during the outage it was meant to contain.
+     */
+    it('returns 503 when the database is unreachable', async () => {
+      harness.database.fail('connection refused');
+      try {
+        const response = await app.inject({ method: 'GET', url: '/ready' });
+
+        expect(response.statusCode).toBe(503);
+        expect(response.json()).toMatchObject({
+          status: 'degraded',
+          checks: { database: 'unavailable' },
+        });
+      } finally {
+        harness.database.heal();
+      }
+    });
+
+    it('recovers to 200 once the database comes back', async () => {
+      // A probe that latches on failure would keep an instance out of rotation
+      // after the dependency recovered, turning a blip into an outage.
+      const response = await app.inject({ method: 'GET', url: '/ready' });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json<{ checks: { database: string } }>().checks.database).toBe('ok');
+    });
+
+    it('says nothing about the database beyond that it is unavailable', async () => {
+      /* Readiness is reachable without credentials and is scraped by
+       * infrastructure. A driver error names the host, the database and the
+       * user; none of that belongs in an unauthenticated response. */
+      harness.database.fail('FATAL: password authentication failed for user "kc_staging"');
+      try {
+        const response = await app.inject({ method: 'GET', url: '/ready' });
+
+        expect(response.body).not.toContain('kc_staging');
+        expect(response.body).not.toContain('password');
+        expect(response.body).not.toContain('FATAL');
+      } finally {
+        harness.database.heal();
+      }
     });
   });
 

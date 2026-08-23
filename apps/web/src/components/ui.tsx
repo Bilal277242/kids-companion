@@ -1,5 +1,6 @@
-import type { ReactNode } from 'react';
+import { cloneElement, isValidElement, type ReactElement, type ReactNode } from 'react';
 
+import { mergeDescribedBy } from '../lib/aria';
 import { metric, type MetricKey } from '../lib/metrics';
 
 /**
@@ -210,6 +211,26 @@ export const Pill = ({
   </span>
 );
 
+/**
+ * A labelled control, with its hint actually attached to it.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * WHY THIS CLONES ITS CHILD
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * The hint is rendered with an id and the control is passed in as `children`,
+ * so associating the two used to be the caller's job — and across nineteen
+ * usages the caller did it zero times. A screen reader announced
+ * "Minutes a day, number" and never "0 means no daily limit", which is the half
+ * that tells you what to type.
+ *
+ * Leaving it to nineteen call sites would fix it today and rot by the twentieth.
+ * Cloning is the version that cannot be forgotten: any control passed here is
+ * described by its hint whether or not anyone remembered.
+ *
+ * An `aria-describedby` the caller set deliberately is merged, not replaced —
+ * a field can legitimately point at both a hint and a validation message.
+ */
 export const Field = ({
   label,
   hint,
@@ -220,17 +241,41 @@ export const Field = ({
   hint?: string;
   htmlFor: string;
   children: ReactNode;
-}) => (
-  <div className="field">
-    <label htmlFor={htmlFor}>{label}</label>
-    {hint !== undefined && (
-      <p className="hint" id={`${htmlFor}-hint`}>
-        {hint}
-      </p>
-    )}
-    {children}
-  </div>
-);
+}) => {
+  const hintId = `${htmlFor}-hint`;
+
+  /* Computed before the clone so it can be narrowed to a string.
+   *
+   * `exactOptionalPropertyTypes` is on, so passing `string | undefined` for an
+   * optional prop is an error rather than a no-op — the compiler is right to
+   * insist, because `aria-describedby=""` is a dangling reference and an
+   * explicit `undefined` is not the same as an absent attribute. */
+  const control = isValidElement(children)
+    ? (children as ReactElement<{ 'aria-describedby'?: string }>)
+    : undefined;
+
+  const describedBy =
+    hint === undefined || control === undefined
+      ? undefined
+      : mergeDescribedBy(control.props['aria-describedby'], hintId);
+
+  const described =
+    control !== undefined && describedBy !== undefined
+      ? cloneElement(control, { 'aria-describedby': describedBy })
+      : children;
+
+  return (
+    <div className="field">
+      <label htmlFor={htmlFor}>{label}</label>
+      {hint !== undefined && (
+        <p className="hint" id={hintId}>
+          {hint}
+        </p>
+      )}
+      {described}
+    </div>
+  );
+};
 
 export const CheckboxRow = ({
   id,

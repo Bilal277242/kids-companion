@@ -84,6 +84,48 @@ const SELECT_CHILD = `
          status, avatar_key, preferred_character_id, archived_at, created_at, updated_at
     from children`;
 
+/**
+ * Languages for MANY children, in one statement.
+ *
+ * The per-child version below reads better and is right for a single profile.
+ * Used in a loop it is an N+1 — see the list handler, where this exists
+ * because that is exactly what happened.
+ */
+const loadLanguagesFor = async (
+  tx: Queryable,
+  childIds: readonly string[],
+): Promise<Map<string, { languageCode: string; isPrimary: boolean; proficiency: string }[]>> => {
+  const grouped = new Map<
+    string,
+    { languageCode: string; isPrimary: boolean; proficiency: string }[]
+  >();
+  if (childIds.length === 0) return grouped;
+
+  const { rows } = await tx.query<{
+    child_id: string;
+    language_code: string;
+    is_primary: boolean;
+    proficiency: 'learning' | 'conversational' | 'fluent' | 'native';
+  }>(
+    `select child_id, language_code, is_primary, proficiency
+       from child_languages where child_id = any($1::uuid[])
+      order by child_id, is_primary desc, language_code`,
+    [[...childIds]],
+  );
+
+  for (const row of rows) {
+    const existing = grouped.get(row.child_id) ?? [];
+    existing.push({
+      languageCode: row.language_code,
+      isPrimary: row.is_primary,
+      proficiency: row.proficiency,
+    });
+    grouped.set(row.child_id, existing);
+  }
+
+  return grouped;
+};
+
 const loadLanguages = async (tx: Queryable, childId: string) => {
   const { rows } = await tx.query<{
     language_code: string;
@@ -199,9 +241,13 @@ export const childRoutes =
             [request.query.includeArchived],
           );
 
-          return await Promise.all(
-            rows.map(async (row) => present(row, await loadLanguages(tx, row.id))),
+          // ONE query for every child's languages, not one per child.
+          const languages = await loadLanguagesFor(
+            tx,
+            rows.map((row) => row.id),
           );
+
+          return rows.map((row) => present(row, (languages.get(row.id) ?? []) as never));
         });
 
         return await reply.status(200).send({ items });

@@ -22,6 +22,12 @@ coverage
 
 docs
 tests
+# …but the manifest must survive. `pnpm install --frozen-lockfile` validates the
+# lockfile against every workspace member, and `pnpm-workspace.yaml` lists
+# `tests`. A missing member reads as a stale lockfile and fails the build, so the
+# one file that describes it is kept while its ~1,400 test files are not.
+!tests/package.json
+
 infra/docker
 *.md
 !README.md

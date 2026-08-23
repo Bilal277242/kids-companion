@@ -473,14 +473,14 @@ describe('schema invariants', () => {
 
       await harness.db.query(
         `insert into subscriptions (parent_id, plan_id, rail, status)
-         select $1, p.id, 'mock', 'active' from subscription_plans p where p.code = 'family_monthly'`,
+         select $1, p.id, 'mock', 'active' from subscription_plans p where p.code = 'monthly'`,
         [other.parentId],
       );
 
       await expect(
         harness.db.query(
           `insert into subscriptions (parent_id, plan_id, rail, status)
-           select $1, p.id, 'stripe', 'trialing' from subscription_plans p where p.code = 'family_annual'`,
+           select $1, p.id, 'stripe', 'trialing' from subscription_plans p where p.code = 'yearly'`,
           [other.parentId],
         ),
       ).rejects.toThrow(/uq_subscriptions_one_live_per_parent/);
@@ -490,8 +490,10 @@ describe('schema invariants', () => {
       // Enforcing the sign means a reconciliation SUM cannot silently be wrong.
       const other = await seedFamily(harness.db, 'refund');
       const sub = await harness.db.query<{ id: string }>(
-        `insert into subscriptions (parent_id, plan_id, rail, status)
-         select $1, p.id, 'mock', 'cancelled' from subscription_plans p where p.code = 'free'
+        // `cancelled_at` is required alongside the status — see
+        // ck_subscriptions_cancelled_has_timestamp.
+        `insert into subscriptions (parent_id, plan_id, rail, status, cancelled_at)
+         select $1, p.id, 'mock', 'cancelled', now() from subscription_plans p where p.code = 'free'
          returning id`,
         [other.parentId],
       );

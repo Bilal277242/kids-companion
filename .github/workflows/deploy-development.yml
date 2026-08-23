@@ -1,0 +1,82 @@
+# Development — the shared integration environment.
+#
+# Deploys automatically on every push to main that passed CI. This is the only
+# tier that deploys without a human, and it can be: it holds synthetic data, no
+# customer depends on it, and rolling back is redeploying the previous SHA.
+#
+# Secrets come from the `development` GitHub Environment. Nothing here echoes
+# one — see CI_CD.md §7.
+
+name: Deploy — development
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  # One deployment at a time, and do NOT cancel one in progress. A cancelled
+  # deploy mid-migration leaves a schema nobody chose.
+  group: deploy-development
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    uses: ./.github/workflows/build-images.yml
+    with:
+      ref: ${{ github.sha }}
+
+  deploy:
+    name: Deploy
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: development
+      url: ${{ vars.DEVELOPMENT_URL }}
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      # ═══════════════════════════════════════════════════════════════════════
+      # MIGRATIONS FIRST, AND ONLY WHAT IS PENDING IS REPORTED
+      # ═══════════════════════════════════════════════════════════════════════
+      #
+      # `db:status` prints versions, never data and never the connection string.
+      # Running it first means the log says what was about to change, which is
+      # the first thing anyone reads when a deploy goes wrong.
+      - name: Pending migrations
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DATABASE_SSL_MODE: require
+        run: pnpm db:status
+
+      - name: Apply migrations
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DATABASE_SSL_MODE: require
+        run: pnpm db:migrate
+
+      - name: Release
+        env:
+          API_IMAGE: ${{ needs.build.outputs.api-image }}
+          WEB_IMAGE: ${{ needs.build.outputs.web-image }}
+          DEPLOY_TARGET: ${{ vars.DEVELOPMENT_DEPLOY_TARGET }}
+        run: ./infra/scripts/release.sh development
+
+      - name: Verify the deployment answers
+        env:
+          BASE_URL: ${{ vars.DEVELOPMENT_URL }}
+        run: ./infra/scripts/verify-release.sh

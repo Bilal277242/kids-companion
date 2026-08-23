@@ -177,23 +177,44 @@ Legend: **Req** = required in production · **Secret** = never in a file, never 
 
 ### Payments
 
-| Variable                           | Req | Secret | Default   | Notes                                                                                    |
-| ---------------------------------- | :-: | :----: | --------- | ---------------------------------------------------------------------------------------- |
-| `PAYMENTS_ENABLED`                 |     |        | `false`   | Off until Phase 6                                                                        |
-| `PAYMENTS_DEFAULT_CURRENCY`        |     |        | `PKR`     |                                                                                          |
-| `STRIPE_SECRET_KEY`                |     |   ✓    | —         |                                                                                          |
-| `STRIPE_WEBHOOK_SECRET`            |     |   ✓    | —         | **Signature verification is mandatory.** An unverified webhook grants free subscriptions |
-| `STRIPE_PRICE_ID_*`                |     |        | —         |                                                                                          |
-| `JAZZCASH_MERCHANT_ID`             |     |        | —         |                                                                                          |
-| `JAZZCASH_PASSWORD`                |     |   ✓    | —         |                                                                                          |
-| `JAZZCASH_INTEGRITY_SALT`          |     |   ✓    | —         | Request/response hashing                                                                 |
-| `JAZZCASH_ENVIRONMENT`             |     |        | `sandbox` |                                                                                          |
-| `EASYPAISA_STORE_ID`               |     |        | —         |                                                                                          |
-| `EASYPAISA_HASH_KEY`               |     |   ✓    | —         |                                                                                          |
-| `APPLE_IAP_SHARED_SECRET`          |     |   ✓    | —         | Receipt validation — server-side only, never trust a client receipt                      |
-| `APPLE_IAP_ENVIRONMENT`            |     |        | `sandbox` |                                                                                          |
-| `GOOGLE_PLAY_PACKAGE_NAME`         |     |        | —         |                                                                                          |
-| `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON` |     |   ✓    | —         | Base64                                                                                   |
+> **No payment rail is production-ready.** Every one of the four is
+> sandbox-only, and `PAYMENTS_VERIFIED_RAILS` is what stops an unverified rail
+> from taking real money. Read [PAYMENT_RAILS.md](PAYMENT_RAILS.md) before
+> changing anything below.
+
+| Variable                             | Req | Secret | Default   | Notes                                                                                     |
+| ------------------------------------ | :-: | :----: | --------- | ----------------------------------------------------------------------------------------- |
+| `PAYMENTS_ENABLED`                   |     |        | `false`   | Off until Phase 6                                                                         |
+| `PAYMENTS_PROVIDER`                  |     |        | `mock`    | Subscription checkout rail. `mock` is refused outside local/ci                            |
+| `PAYMENTS_ENABLED_RAILS`             |     |        | —         | **Empty is valid** and means payments are off; the app works normally on the free tier    |
+| `PAYMENTS_VERIFIED_RAILS`            |     |        | —         | **Human attestation.** A deployed env refuses to boot with an enabled-but-unverified rail |
+| `PAYMENTS_SANDBOX_CALLBACK_SECRET`   |     |        | local key | Signs sandbox rail callbacks. Local and CI only                                           |
+| `PAYMENTS_RECONCILE_AFTER_MINUTES`   |     |        | `15`      | How long a payment may sit unanswered before we ask the rail                              |
+| `PAYMENTS_WEBHOOK_TOLERANCE_SECONDS` |     |        | `300`     | How old a signed webhook may be                                                           |
+| `PAYMENTS_DEFAULT_CURRENCY`          |     |        | `PKR`     |                                                                                           |
+| `STRIPE_SECRET_KEY`                  |     |   ✓    | —         |                                                                                           |
+| `STRIPE_WEBHOOK_SECRET`              |     |   ✓    | —         | **Signature verification is mandatory.** An unverified webhook grants free subscriptions  |
+| `STRIPE_PRICE_ID_*`                  |     |        | —         |                                                                                           |
+| `JAZZCASH_MERCHANT_ID`               |     |        | —         |                                                                                           |
+| `JAZZCASH_PASSWORD`                  |     |   ✓    | —         |                                                                                           |
+| `JAZZCASH_INTEGRITY_SALT`            |     |   ✓    | —         | Request/response hashing                                                                  |
+| `JAZZCASH_MODE`                      |     |        | `sandbox` | `live` refuses every call until the rail is verified                                      |
+| `EASYPAISA_STORE_ID`                 |     |        | —         |                                                                                           |
+| `EASYPAISA_HASH_KEY`                 |     |   ✓    | —         |                                                                                           |
+| `EASYPAISA_MODE`                     |     |        | `sandbox` | `live` refuses every call until the rail is verified                                      |
+| `CARRIER_BILLING_AGGREGATOR`         |     |        | —         | No aggregator chosen — see Q-02                                                           |
+| `CARRIER_BILLING_MERCHANT_ID`        |     |        | —         |                                                                                           |
+| `CARRIER_BILLING_API_KEY`            |     |   ✓    | —         |                                                                                           |
+| `CARRIER_BILLING_CALLBACK_SECRET`    |     |   ✓    | —         |                                                                                           |
+| `CARRIER_BILLING_MODE`               |     |        | `sandbox` | Refunds are expected to be impossible on this rail                                        |
+| `CARD_PROCESSOR`                     |     |        | —         | No processor chosen                                                                       |
+| `CARD_SECRET_KEY`                    |     |   ✓    | —         |                                                                                           |
+| `CARD_WEBHOOK_SECRET`                |     |   ✓    | —         |                                                                                           |
+| `CARD_MODE`                          |     |        | `sandbox` | This application never receives a card number                                             |
+| `APPLE_IAP_SHARED_SECRET`            |     |   ✓    | —         | Receipt validation — server-side only, never trust a client receipt                       |
+| `APPLE_IAP_ENVIRONMENT`              |     |        | `sandbox` |                                                                                           |
+| `GOOGLE_PLAY_PACKAGE_NAME`           |     |        | —         |                                                                                           |
+| `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON`   |     |   ✓    | —         | Base64                                                                                    |
 
 ### Quotas
 

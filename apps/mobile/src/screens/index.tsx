@@ -393,7 +393,10 @@ export const ConversationScreen = ({
       dispatch({ type: 'REPLY', reply: turn.reply, hasAudio: turn.audio != null });
 
       if (turn.audio != null) {
-        await audio.play({ uri: `/api/voice/audio/${turn.audio.key}` });
+        // Absolute, and carrying the session token: the player fetches this
+        // itself, so it gets neither the base url nor the authorization header
+        // that `api.post` would have added. See `mediaSource`.
+        await audio.play(await api.mediaSource(`/api/voice/audio/${turn.audio.key}`));
         dispatch({ type: 'PLAYBACK_FINISHED' });
       }
     } finally {

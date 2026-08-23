@@ -26,6 +26,7 @@
     "test:e2e:web": "playwright test",
     "test:watch": "vitest",
     "coverage": "vitest run --coverage --passWithNoTests",
+    "perf": "tsc -b && tsx tests/performance/run.ts",
     "verify:no-secrets": "node infra/scripts/check-no-secrets.mjs",
     "env:check": "node infra/scripts/check-env.mjs",
     "docker:up": "docker compose -f infra/docker/docker-compose.yml up -d",
@@ -37,7 +38,17 @@
     "db:status": "node infra/scripts/migrate.mjs --status",
     "db:seed:dev": "node infra/scripts/seed-dev.mjs",
     "db:types": "tsc -b && node infra/scripts/generate-db-types.mjs",
-    "db:types:check": "tsc -b && node infra/scripts/generate-db-types.mjs --check"
+    "db:types:check": "tsc -b && node infra/scripts/generate-db-types.mjs --check",
+    "dev:worker": "pnpm --filter @kids/api run dev:worker",
+    "staging:up": "docker compose -f infra/docker/docker-compose.staging.yml --env-file .env.staging up -d --build",
+    "staging:down": "docker compose -f infra/docker/docker-compose.staging.yml --env-file .env.staging down",
+    "staging:logs": "docker compose -f infra/docker/docker-compose.staging.yml --env-file .env.staging logs -f",
+    "staging:migrate": "docker compose -f infra/docker/docker-compose.staging.yml --env-file .env.staging run --rm migrate",
+    "staging:ps": "docker compose -f infra/docker/docker-compose.staging.yml --env-file .env.staging ps",
+    "verify:deploy": "node infra/scripts/check-deploy.mjs",
+    "verify:audit": "node infra/scripts/check-audit.mjs",
+    "verify:migrations": "node infra/scripts/check-migrations.mjs",
+    "verify:references": "node infra/scripts/check-project-references.mjs"
   },
   "simple-git-hooks": {
     "pre-commit": "pnpm exec lint-staged",

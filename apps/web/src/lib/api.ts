@@ -220,46 +220,50 @@ export interface Indicators {
   }[];
 }
 
-export interface Subscription {
-  readonly plan: {
-    readonly code: string;
-    readonly displayName: string;
-    readonly description: string;
-    readonly tier: 'free' | 'paid';
-    readonly status: string;
-    readonly priceMinor: number;
-    readonly currency: string;
-    readonly billingInterval: string;
-  };
+export interface Plan {
+  readonly code: string;
+  readonly displayName: string;
+  readonly description: string;
+  readonly tier: 'free' | 'paid';
+  readonly priceMinor: number;
+  readonly currency: string;
+  readonly billingInterval: 'week' | 'month' | 'year' | 'once' | 'none';
+  readonly trialDays: number;
+  readonly graceDays: number;
   readonly limits: {
-    readonly dailyTurnLimit: number;
     readonly dailyMinuteLimit: number;
     readonly childProfileLimit: number;
+    readonly dailyTurnLimit: number;
     readonly maxConversationTurns: number;
     readonly concurrentConversationLimit: number;
     readonly voiceEnabled: boolean;
     readonly dailyVoiceTurnLimit: number;
   };
-  readonly renewal: {
-    readonly currentPeriodEnd: string | null;
-    readonly cancelAt: string | null;
-    readonly trialEndsAt: string | null;
-  };
+  readonly availableRails: readonly string[];
+}
+
+/**
+ * The resolved subscription state.
+ *
+ * `status` has already had elapsed deadlines applied by the API, so a grace
+ * window that closed a minute ago reads as `expired` here — the dashboard never
+ * has to do date arithmetic to decide what to show.
+ */
+export interface SubscriptionStatus {
+  readonly status: 'free' | 'trialing' | 'active' | 'grace' | 'past_due' | 'cancelled' | 'expired';
+  readonly entitled: boolean;
+  readonly plan: Plan;
+  readonly rail: string | null;
+  readonly trialEndsAt: string | null;
+  readonly currentPeriodEnd: string | null;
+  readonly graceEndsAt: string | null;
+  readonly cancelAt: string | null;
+  readonly cancelledAt: string | null;
+  readonly trialAvailable: boolean;
+  readonly childProfilesUsed: number;
   /** A brand and four digits. There is no card number to return. */
   readonly paymentMethod: { readonly brand: string | null; readonly last4: string | null };
-  readonly childProfilesUsed: number;
-  readonly availablePlans: readonly {
-    code: string;
-    displayName: string;
-    description: string;
-    tier: 'free' | 'paid';
-    priceMinor: number;
-    currency: string;
-    billingInterval: string;
-    dailyMinuteLimit: number;
-    childProfileLimit: number;
-  }[];
-  readonly note: string;
+  readonly explanation: string;
 }
 
 export interface ParentProfile {
@@ -316,7 +320,29 @@ export const updateControls = async (childId: string, body: unknown) =>
     json: body,
   });
 
-export const getSubscription = async () => await apiFetch<Subscription>('/api/parent/subscription');
+export const getSubscriptionStatus = async () =>
+  await apiFetch<SubscriptionStatus>('/api/subscriptions/status');
+
+export const getPlans = async () =>
+  await apiFetch<{ items: Plan[]; currency: string }>('/api/subscriptions/plans');
+
+/**
+ * Cancel and resume.
+ *
+ * Neither takes a subscription id: the API resolves it from the session, so
+ * there is no parameter through which one parent could name another's plan.
+ */
+export const cancelSubscription = async () =>
+  await apiFetch<{ status: string; accessUntil: string | null; explanation: string }>(
+    '/api/subscriptions/cancel',
+    { method: 'POST', json: {} },
+  );
+
+export const resumeSubscription = async () =>
+  await apiFetch<{ status: string; renewsAt: string | null; explanation: string }>(
+    '/api/subscriptions/resume',
+    { method: 'POST', json: {} },
+  );
 
 export const getParentProfile = async () => await apiFetch<ParentProfile>('/v1/parents/me');
 

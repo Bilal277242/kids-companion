@@ -100,6 +100,39 @@ export const createApiClient = (options: ApiClientOptions) => {
     /** Multipart, for a voice turn or a practice attempt. */
     upload: async <T>(route: string, form: FormData) =>
       await request<T>('POST', route, { body: form as unknown as BodyInit }),
+
+    /**
+     * An absolute, authorised source for media the audio player fetches itself.
+     *
+     * ═══════════════════════════════════════════════════════════════════════
+     * WHY THIS EXISTS RATHER THAN THE SCREEN BUILDING A URL
+     * ═══════════════════════════════════════════════════════════════════════
+     *
+     * The player does its own network request, outside `request()` above, so it
+     * gets none of what that function adds. It was being handed a bare
+     * `/api/voice/audio/<key>` and nothing else, which fails twice over:
+     *
+     *   NO ORIGIN    a relative path has nothing to resolve against on a native
+     *                platform — there is no page the app was served from.
+     *   NO TOKEN     that endpoint is authenticated and scoped to the child's
+     *                own conversations, so it answers 401 without one.
+     *
+     * The effect was that the character's SPOKEN reply never played. For a
+     * voice-first product whose users are too young to read the transcript, that
+     * is the whole interaction.
+     *
+     * Returning both parts together keeps the token inside this client, which is
+     * the rule this file opens with: the screen never handles it.
+     */
+    mediaSource: async (
+      route: string,
+    ): Promise<{ uri: string; headers: Record<string, string> }> => {
+      const token = await options.getToken();
+      return {
+        uri: `${options.baseUrl}${route}`,
+        headers: token === undefined ? {} : { authorization: `Bearer ${token}` },
+      };
+    },
   };
 };
 

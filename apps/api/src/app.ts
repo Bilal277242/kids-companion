@@ -8,6 +8,7 @@ import {
   createMockProvider,
   type AIProvider,
 } from '@kids/ai';
+import { createMetricsRegistry, type MetricsRegistry } from '@kids/analytics';
 import {
   createLocalAuthAdapter,
   createSessionService,
@@ -17,6 +18,22 @@ import {
 } from '@kids/auth';
 import type { Config } from '@kids/config';
 import type { Database } from '@kids/db';
+import {
+  createMockSubscriptionProvider,
+  createAppleStoreProvider,
+  createGooglePlayProvider,
+  createMockStoreProvider,
+  createRailRegistry,
+  describeRegistry,
+  type CardConfig,
+  type CarrierBillingConfig,
+  type EasypaisaConfig,
+  type JazzCashConfig,
+  type MobileStore,
+  type RailRegistry,
+  type StoreBillingProvider,
+  type SubscriptionProvider,
+} from '@kids/payments';
 import {
   createMockAnalysisProvider,
   createTranscriptionAnalysisProvider,
@@ -42,9 +59,12 @@ import {
   type ZodTypeProvider,
 } from 'fastify-type-provider-zod';
 
+import { createAlertMonitor, createLogAlertSink } from './alerts.js';
 import { createAuditLogger } from './audit.js';
+import { createPaymentStore } from './payment-store.js';
 import authPlugin from './plugins/auth.js';
 import errorBoundary from './plugins/error-boundary.js';
+import metricsPlugin from './plugins/metrics.js';
 import requestContext from './plugins/request-context.js';
 import security from './plugins/security.js';
 import { authRoutes } from './routes/auth.js';
@@ -54,11 +74,17 @@ import { consentRoutes } from './routes/consent.js';
 import { conversationRoutes } from './routes/conversations.js';
 import { healthRoutes } from './routes/health.js';
 import { learningRoutes } from './routes/learning.js';
+import { metricsScrapeRoutes, observabilityRoutes } from './routes/observability.js';
 import { parentRoutes as parentDashboardRoutes } from './routes/parent.js';
 import { parentRoutes as parentAccountRoutes } from './routes/parents.js';
+import { paymentRoutes } from './routes/payments.js';
 import { practiceRoutes } from './routes/practice.js';
+import { storeBillingRoutes } from './routes/store-billing.js';
+import { subscriptionRoutes } from './routes/subscriptions.js';
 import { voiceRoutes } from './routes/voice.js';
 import { createAttemptCounter, createPolicyStore } from './safety-store.js';
+import { createStoreBilling } from './store-billing.js';
+import { createSubscriptionReconciler } from './subscription-reconciler.js';
 
 export interface BuildAppOptions {
   readonly config: Config;
@@ -83,6 +109,37 @@ export interface BuildAppOptions {
   /** Injected so a test can assert audio is actually gone, not merely marked. */
   readonly audioStorage?: AudioStorage;
   readonly analysisProvider?: SpeechAnalysisProvider;
+  /**
+   * Overrides the payment rail.
+   *
+   * Set only by tests, which need to sign webhooks with a known secret and to
+   * drive a rail that refuses a cancellation. Production resolves this from
+   * `PAYMENTS_PROVIDER`, and configuration refuses `mock` outside local and ci.
+   */
+  readonly subscriptionProvider?: SubscriptionProvider;
+  /**
+   * Overrides the payment rail registry.
+   *
+   * Tests need rails that refuse, rails that go quiet, and — importantly — a
+   * registry with nothing in it, because "payments are off" is the default
+   * state of this product and has to keep working.
+   */
+  readonly railRegistry?: RailRegistry;
+  /**
+   * Overrides the mobile store providers.
+   *
+   * Tests need a store that refuses, a store that changes its mind, and — the
+   * default — no store at all, since a product with no app-store billing has to
+   * keep working.
+   */
+  readonly storeProviders?: readonly (readonly [MobileStore, StoreBillingProvider])[];
+  /**
+   * Overrides the metrics registry.
+   *
+   * Injected so a test can assert what was recorded — and, more usefully, that
+   * nothing identifying ever reaches a label.
+   */
+  readonly metricsRegistry?: MetricsRegistry;
 }
 
 /**
@@ -272,6 +329,27 @@ export const buildApp = async (options: BuildAppOptions) => {
       : createMockAnalysisProvider());
 
   await app.register(requestContext);
+
+  /* Metrics before the error boundary, so a request that fails inside another
+   * plugin is still counted — an error rate that silently excludes the errors
+   * it cannot see is worse than no error rate. */
+  const metricsRegistry = options.metricsRegistry ?? createMetricsRegistry();
+  await app.register(metricsPlugin, {
+    registry: metricsRegistry,
+    nowMs: () => clock.now(),
+  });
+
+  /* Alerts.
+   *
+   * The default sink is a `fatal` log line rather than an outbound webhook:
+   * every deployment already ships logs somewhere, and an alerting path with a
+   * network dependency fails exactly when the network does. */
+  const alertMonitor = createAlertMonitor({
+    registry: metricsRegistry,
+    sink: createLogAlertSink(app.log),
+    clock,
+  });
+
   await app.register(errorBoundary);
   await app.register(security, { config });
   await app.register(authPlugin, { db, tokens, sessions });
@@ -304,7 +382,7 @@ export const buildApp = async (options: BuildAppOptions) => {
     transform: jsonSchemaTransform,
   });
 
-  await app.register(healthRoutes(config));
+  await app.register(healthRoutes(config, { db }));
   await app.register(
     authRoutes({
       auth,
@@ -390,11 +468,260 @@ export const buildApp = async (options: BuildAppOptions) => {
     { prefix: '/api' },
   );
 
+  /* Payments.
+   *
+   * The rail is chosen by configuration, and `mock` is refused outright in any
+   * deployed environment — its signing key is a documented default, which would
+   * make the webhook endpoint a subscription anyone could grant themselves. */
+  const subscriptionProvider =
+    options.subscriptionProvider ??
+    createMockSubscriptionProvider({
+      webhookSecret: config.PAYMENTS_MOCK_WEBHOOK_SECRET,
+      toleranceSeconds: config.PAYMENTS_WEBHOOK_TOLERANCE_SECONDS,
+      now: () => new Date(clock.now()),
+    });
+
+  const subscriptionReconciler = createSubscriptionReconciler({ db, audit, clock });
+
+  /* Payment rails.
+   *
+   * ZERO ENABLED RAILS IS A SUPPORTED STATE, and the default one. Every family
+   * is then on the free tier, every child can still talk, and the only visible
+   * difference is that checkout says payments are unavailable. Nothing in the
+   * conversation path, the safety pipeline, or the dashboard touches this. */
+  const railClock = () => new Date(clock.now());
+
+  const jazzcash: JazzCashConfig | undefined =
+    config.JAZZCASH_MERCHANT_ID === undefined
+      ? undefined
+      : {
+          merchantId: config.JAZZCASH_MERCHANT_ID,
+          password: config.JAZZCASH_PASSWORD ?? '',
+          integritySalt: config.JAZZCASH_INTEGRITY_SALT ?? '',
+          mode: config.JAZZCASH_MODE,
+          sandboxCallbackSecret: config.PAYMENTS_SANDBOX_CALLBACK_SECRET,
+          now: railClock,
+        };
+
+  const easypaisa: EasypaisaConfig | undefined =
+    config.EASYPAISA_STORE_ID === undefined
+      ? undefined
+      : {
+          storeId: config.EASYPAISA_STORE_ID,
+          hashKey: config.EASYPAISA_HASH_KEY ?? '',
+          mode: config.EASYPAISA_MODE,
+          sandboxCallbackSecret: config.PAYMENTS_SANDBOX_CALLBACK_SECRET,
+          now: railClock,
+        };
+
+  const carrierBilling: CarrierBillingConfig | undefined =
+    config.CARRIER_BILLING_MERCHANT_ID === undefined
+      ? undefined
+      : {
+          aggregator: config.CARRIER_BILLING_AGGREGATOR ?? '',
+          merchantId: config.CARRIER_BILLING_MERCHANT_ID,
+          apiKey: config.CARRIER_BILLING_API_KEY ?? '',
+          callbackSecret: config.CARRIER_BILLING_CALLBACK_SECRET ?? '',
+          mode: config.CARRIER_BILLING_MODE,
+          sandboxCallbackSecret: config.PAYMENTS_SANDBOX_CALLBACK_SECRET,
+          now: railClock,
+        };
+
+  const card: CardConfig | undefined =
+    config.CARD_PROCESSOR === undefined
+      ? undefined
+      : {
+          processor: config.CARD_PROCESSOR,
+          secretKey: config.CARD_SECRET_KEY ?? '',
+          webhookSecret: config.CARD_WEBHOOK_SECRET ?? '',
+          mode: config.CARD_MODE,
+          sandboxCallbackSecret: config.PAYMENTS_SANDBOX_CALLBACK_SECRET,
+          now: railClock,
+        };
+
+  const railRegistry =
+    options.railRegistry ??
+    createRailRegistry({
+      enabled: config.PAYMENTS_ENABLED_RAILS as never,
+      ...(jazzcash ? { jazzcash } : {}),
+      ...(easypaisa ? { easypaisa } : {}),
+      ...(carrierBilling ? { carrierBilling } : {}),
+      ...(card ? { card } : {}),
+    });
+
+  // Logged once at boot. "Which rails are live, and is any of them unverified?"
+  // is the question nobody asks until an incident.
+  if (railRegistry.anyAvailable()) {
+    app.log.info({ rails: describeRegistry(railRegistry) }, 'payment rails enabled');
+  } else {
+    app.log.info('no payment rails enabled — the free tier is the only plan');
+  }
+
+  const paymentStore = createPaymentStore({
+    db,
+    registry: railRegistry,
+    audit,
+    clock,
+    reconcileAfterMinutes: config.PAYMENTS_RECONCILE_AFTER_MINUTES,
+  });
+
+  await app.register(paymentRoutes({ registry: railRegistry, payments: paymentStore, audit }), {
+    prefix: '/api',
+  });
+
+  /* Mobile store billing.
+   *
+   * The mock provider is a REAL verification service that can say no — a stub
+   * that confirmed everything would make the tests pass while proving the
+   * opposite of what they claim. Configuration refuses it in any deployed
+   * environment, because there it would grant subscriptions nobody paid for. */
+  const storeProviders = new Map<MobileStore, StoreBillingProvider>(options.storeProviders ?? []);
+
+  if (options.storeProviders === undefined) {
+    for (const store of config.STORE_BILLING_ENABLED_STORES) {
+      if (store !== 'apple_iap' && store !== 'google_play') continue;
+
+      if (config.STORE_BILLING_PROVIDER === 'mock') {
+        storeProviders.set(
+          store,
+          createMockStoreProvider({
+            store,
+            notificationSecret: config.STORE_BILLING_MOCK_SECRET,
+            environment: config.STORE_BILLING_ENVIRONMENT,
+            productId: `${store}.monthly`,
+            now: () => new Date(clock.now()),
+          }),
+        );
+        continue;
+      }
+
+      if (store === 'apple_iap' && config.APPLE_IAP_ISSUER_ID !== undefined) {
+        storeProviders.set(
+          store,
+          createAppleStoreProvider({
+            issuerId: config.APPLE_IAP_ISSUER_ID,
+            keyId: config.APPLE_IAP_KEY_ID ?? '',
+            privateKey: config.APPLE_IAP_PRIVATE_KEY ?? '',
+            bundleId: config.APPLE_IAP_BUNDLE_ID ?? '',
+            ...(config.APPLE_IAP_SHARED_SECRET === undefined
+              ? {}
+              : { sharedSecret: config.APPLE_IAP_SHARED_SECRET }),
+            environment: config.STORE_BILLING_ENVIRONMENT,
+          }),
+        );
+      }
+
+      if (store === 'google_play' && config.GOOGLE_PLAY_PACKAGE_NAME !== undefined) {
+        storeProviders.set(
+          store,
+          createGooglePlayProvider({
+            packageName: config.GOOGLE_PLAY_PACKAGE_NAME,
+            serviceAccountJson: config.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON ?? '',
+            ...(config.GOOGLE_PLAY_NOTIFICATION_TOPIC === undefined
+              ? {}
+              : { notificationTopic: config.GOOGLE_PLAY_NOTIFICATION_TOPIC }),
+            environment: config.STORE_BILLING_ENVIRONMENT,
+          }),
+        );
+      }
+    }
+  }
+
+  const storeBilling = createStoreBilling({ db, providers: storeProviders, audit, clock });
+
+  await app.register(
+    storeBillingRoutes({ billing: storeBilling, providers: storeProviders, audit }),
+    { prefix: '/api' },
+  );
+
+  await app.register(
+    subscriptionRoutes({
+      db,
+      provider: subscriptionProvider,
+      reconciler: subscriptionReconciler,
+      audit,
+      clock,
+      checkoutRateLimitPerHour: config.RATE_LIMIT_CHECKOUT_PER_HOUR,
+    }),
+    { prefix: '/api' },
+  );
+
+  /* `/metrics` sits outside `/api`: it is scraped by infrastructure and is not
+   * part of the product's API surface. The staff endpoints are a SEPARATE
+   * plugin under `/api`, registered once — see docs/SECURITY_AUDIT.md for why
+   * that separation is structural rather than a flag. */
+  await app.register(
+    metricsScrapeRoutes({
+      registry: metricsRegistry,
+      alerts: alertMonitor,
+      metricsEnabled: config.METRICS_ENABLED,
+    }),
+  );
+
+  await app.register(
+    observabilityRoutes({ db, registry: metricsRegistry, alerts: alertMonitor, clock }),
+    { prefix: '/api' },
+  );
+
   await app.register(learningRoutes({ db }), { prefix: '/api' });
   await app.register(parentDashboardRoutes({ db, audit, clock }), { prefix: '/api' });
 
+  /**
+   * ═══════════════════════════════════════════════════════════════════════════
+   * THE SCHEDULED SWEEPS, EXPOSED FOR THE WORKER PROCESS.
+   * ═══════════════════════════════════════════════════════════════════════════
+   *
+   * These are backstops, not the primary path. Entitlement is computed from
+   * timestamps whenever it is read, so a subscription is expired the moment its
+   * window closes whether or not `sweepExpired` has run. What the sweeps buy is
+   * stored state that matches reality, and recovery from the two failures that
+   * leave it behind: a crash mid-write, and a vendor callback that never came.
+   *
+   * They are attached here rather than rebuilt in `worker.ts` so there is
+   * exactly ONE place that decides which rails are enabled, which store
+   * providers are configured, and how they are constructed. A second wiring
+   * path would drift from this one, and the first symptom would be a sweep
+   * quietly reconciling against a rail the API does not use.
+   *
+   * `apps/api/src/worker.ts` builds the app solely to obtain these, and never
+   * calls `listen` — no route registered above is reachable in that process.
+   */
+  app.decorate('maintenance', {
+    /** Moves elapsed subscriptions to `expired`. Returns rows changed. */
+    sweepExpiredSubscriptions: async (): Promise<number> =>
+      await subscriptionReconciler.sweepExpired(),
+
+    /** Asks each rail about payments we never heard the outcome of. */
+    reconcilePayments: async () => await paymentStore.reconcile(),
+
+    /** Re-verifies store purchases whose state may have moved without a notification. */
+    synchroniseStorePurchases: async () => await storeBilling.synchronise(),
+
+    /**
+     * Whether audio retention can be swept from ANOTHER process.
+     *
+     * The only `AudioStorage` implementation is in-memory, so the bytes live in
+     * whichever process wrote them. A sweep run elsewhere would mark the ledger
+     * rows deleted while the objects survived in the API's heap — a retention
+     * record asserting a deletion that did not happen, which is worse than not
+     * sweeping at all. See DEPLOYMENT.md.
+     */
+    audioSweepIsShared: false,
+  });
+
   return app;
 };
+
+declare module 'fastify' {
+  interface FastifyInstance {
+    readonly maintenance: {
+      sweepExpiredSubscriptions(): Promise<number>;
+      reconcilePayments(): Promise<{ checked: number; resolved: number; stillUnresolved: number }>;
+      synchroniseStorePurchases(): Promise<{ checked: number; changed: number }>;
+      readonly audioSweepIsShared: boolean;
+    };
+  }
+}
 
 /** The concrete application type, for callers that need to name it. */
 export type App = Awaited<ReturnType<typeof buildApp>>;

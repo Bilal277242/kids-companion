@@ -11,6 +11,10 @@ const deployedBase = {
   REDIS_KEY_PREFIX: 'kc:prod:',
   SAFETY_ESCALATION_WEBHOOK_URL: 'https://alerts.example.com/hook',
   CORS_ALLOWED_ORIGINS: 'https://app.example.com',
+  // A deployed environment must name a real rail; the mock one is refused.
+  PAYMENTS_PROVIDER: 'stripe',
+  STRIPE_SECRET_KEY: 'sk_test_not_a_real_key',
+  STRIPE_WEBHOOK_SECRET: 'whsec_not_a_real_secret',
 } as const;
 
 describe('parseConfig', () => {
@@ -76,8 +80,26 @@ describe('cross-field rules', () => {
     expect(() => parseConfig({ AI_PROVIDER: 'anthropic' })).toThrow(/ANTHROPIC_API_KEY/);
   });
 
-  it('requires a webhook secret when payments are enabled', () => {
-    expect(() => parseConfig({ PAYMENTS_ENABLED: 'true' })).toThrow(/STRIPE_WEBHOOK_SECRET/);
+  it('requires a webhook secret when the Stripe rail is selected', () => {
+    // An unverified webhook endpoint is a free-subscription vulnerability, so
+    // the credential that verifies signatures is required to boot, not checked
+    // on the first webhook.
+    expect(() => parseConfig({ PAYMENTS_PROVIDER: 'stripe' })).toThrow(/STRIPE_WEBHOOK_SECRET/);
+  });
+
+  /**
+   * ═══════════════════════════════════════════════════════════════════════
+   * THE MOCK RAIL CANNOT REACH A DEPLOYED ENVIRONMENT.
+   * ═══════════════════════════════════════════════════════════════════════
+   *
+   * Its signing key is a documented default in `.env.example`. In production
+   * that is not a mock — it is a webhook endpoint anyone who has read the repo
+   * can post a valid `subscription.activated` to.
+   */
+  it('refuses the mock payment rail outside local and ci', () => {
+    expect(() => parseConfig({ ...deployedBase, PAYMENTS_PROVIDER: 'mock' })).toThrow(
+      /PAYMENTS_PROVIDER/,
+    );
   });
 
   it('accepts a fully specified production environment', () => {

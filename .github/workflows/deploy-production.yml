@@ -1,0 +1,208 @@
+# Production.
+#
+# ═══════════════════════════════════════════════════════════════════════════
+# NEVER AUTOMATIC. TWO GATES, AND THEY GUARD DIFFERENT THINGS.
+# ═══════════════════════════════════════════════════════════════════════════
+#
+#   1. `workflow_dispatch` only. There is no `push` trigger, so merging cannot
+#      reach production. A person chooses a commit and starts this.
+#
+#   2. `environment: production`, which GitHub gates on required reviewers. The
+#      job PAUSES before its first step until someone approves.
+#
+# Gate 2 is a REPOSITORY SETTING, not something this file can turn on. A
+# workflow naming an environment with no protection rules runs straight through.
+# CI_CD.md §5 has the exact settings, and §9 says how to confirm they are
+# actually on — an approval gate nobody verified is a gate nobody has.
+#
+# ═══════════════════════════════════════════════════════════════════════════
+# PROMOTION, NOT REBUILD
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# This deploys the digest already built and verified in staging. It does not
+# rebuild: a rebuild is a different artifact than the one that was tested, and
+# the difference is invisible until it is not.
+#
+# ═══════════════════════════════════════════════════════════════════════════
+# DO NOT USE THIS YET
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# DEPLOYMENT.md §9 lists two blockers for any multi-instance production deploy —
+# in-memory audio storage and per-instance rate limiting. Neither is a setting.
+# The preflight below refuses to continue while they stand.
+
+name: Deploy — production
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Commit SHA verified in staging.
+        required: true
+        type: string
+      confirm:
+        description: Type "deploy to production" to confirm.
+        required: true
+        type: string
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Runs BEFORE the approval gate, so a reviewer is never asked to approve a
+  # release that was going to fail anyway.
+  # ---------------------------------------------------------------------------
+  preflight:
+    name: Preflight
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Confirm the phrase
+        run: |
+          if [ "${{ inputs.confirm }}" != "deploy to production" ]; then
+            echo "::error::Confirmation phrase did not match. Nothing was done."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+
+      - name: The commit is on main
+        run: |
+          # A SHA that never merged has not been reviewed, and may not have been
+          # through CI at all.
+          if ! git merge-base --is-ancestor "${{ inputs.ref }}" origin/main; then
+            echo "::error::${{ inputs.ref }} is not an ancestor of main."
+            exit 1
+          fi
+          echo "commit is on main"
+
+      # ═══════════════════════════════════════════════════════════════════════
+      # THE BLOCKERS
+      # ═══════════════════════════════════════════════════════════════════════
+      #
+      # Deliberately a hard stop rather than a warning. Both are documented in
+      # DEPLOYMENT.md §9, both are missing implementations rather than settings,
+      # and either one makes a multi-instance production deployment unsafe:
+      #
+      #   audio storage is in-memory   — a signed URL from one instance 404s on
+      #                                  another, and audio does not survive a
+      #                                  restart
+      #   rate limiting is per-process — behind N instances every limit is N×,
+      #                                  including the one that makes online
+      #                                  password guessing impractical
+      #
+      # Removing this step is how you say the blockers are resolved. Do that in
+      # the same change that resolves them.
+      - name: Production readiness blockers
+        run: |
+          echo "::error::Production deployment is blocked."
+          {
+            echo "### Production deployment is blocked"
+            echo
+            echo "Two blockers from DEPLOYMENT.md §9 are unresolved:"
+            echo
+            echo "1. **Audio storage is in-memory.** No shared object store exists, so"
+            echo "   audio is not shared between instances and does not survive a restart."
+            echo "2. **Rate limiting is per-instance.** Behind N instances every limit is"
+            echo "   multiplied by N, including the authentication limit."
+            echo
+            echo "Neither is a configuration change. Remove this step in the same"
+            echo "change that resolves them."
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 1
+
+  # ---------------------------------------------------------------------------
+  # Pauses here for approval. The environment is what makes that happen.
+  # ---------------------------------------------------------------------------
+  deploy:
+    name: Deploy
+    needs: preflight
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: ${{ vars.PRODUCTION_URL }}
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref }}
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      # The action rather than `echo "$TOKEN" | docker login`: the credential
+      # never becomes part of a command line that a shell trace could echo.
+      - name: Sign in to the registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Confirm the images exist
+        run: |
+          # Promotion, not rebuild. If staging never published this commit there
+          # is nothing verified to promote.
+          docker manifest inspect "ghcr.io/${{ github.repository }}/api:${{ inputs.ref }}" > /dev/null
+          docker manifest inspect "ghcr.io/${{ github.repository }}/web:${{ inputs.ref }}" > /dev/null
+          echo "both images are present for ${{ inputs.ref }}"
+
+      # ═══════════════════════════════════════════════════════════════════════
+      # MIGRATIONS: SHOW, THEN APPLY
+      # ═══════════════════════════════════════════════════════════════════════
+      #
+      # The pending list is printed before anything runs, and it is the record
+      # someone reads at 3 a.m. Migrations are FORWARD-ONLY and are not rolled
+      # back (CI_CD.md §8), so this is the point of no return — everything after
+      # it is recoverable by redeploying the previous image; this is not.
+      - name: Pending migrations
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DATABASE_SSL_MODE: require
+        run: pnpm db:status
+
+      - name: Apply migrations
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DATABASE_SSL_MODE: require
+        run: pnpm db:migrate
+
+      - name: Release
+        env:
+          API_IMAGE: ghcr.io/${{ github.repository }}/api:${{ inputs.ref }}
+          WEB_IMAGE: ghcr.io/${{ github.repository }}/web:${{ inputs.ref }}
+          DEPLOY_TARGET: ${{ vars.PRODUCTION_DEPLOY_TARGET }}
+        run: ./infra/scripts/release.sh production
+
+      - name: Verify the deployment answers
+        env:
+          BASE_URL: ${{ vars.PRODUCTION_URL }}
+        run: ./infra/scripts/verify-release.sh
+
+      - name: Record what shipped
+        if: ${{ success() }}
+        run: |
+          {
+            echo "### Released to production"
+            echo
+            echo "Commit: \`${{ inputs.ref }}\`"
+            echo "Approved by: @${{ github.actor }}"
+            echo
+            echo "Rollback: re-run this workflow with the previous commit SHA."
+            echo "Migrations are forward-only and are NOT undone — see CI_CD.md §8."
+          } >> "$GITHUB_STEP_SUMMARY"

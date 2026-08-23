@@ -36,7 +36,14 @@ Apple and Google require digital subscriptions sold inside a mobile app to use t
 
 **Candidate resolutions:** store billing everywhere and absorb the margin; web-first checkout with the app as a pure client (constrained by steering rules); store billing internationally with local rails on web for Pakistan; or a non-subscription model.
 
-**This is a business and legal decision, not an engineering one.** The `PaymentProvider` port means engineering is not blocked on building — but pricing, unit economics, and the entire funnel are.
+**This is a business and legal decision, not an engineering one.** The `PaymentRailAdapter` port means engineering is not blocked on building — but pricing, unit economics, and the entire funnel are.
+
+**What engineering has done anyway (2026-08-19):** four adapters — JazzCash, Easypaisa, carrier billing, cards — behind one interface, each with a working sandbox and a verification checklist. **None is production-ready**, and `PAYMENTS_VERIFIED_RAILS` makes a deployed environment refuse to boot with an unverified rail enabled. See [PAYMENT_RAILS.md](PAYMENT_RAILS.md).
+
+Two findings that feed back into this decision rather than out of it:
+
+- **Carrier billing probably cannot refund**, and anyone holding the family's phone can authorise a charge. In a children's product that is a safety consideration, not only a billing one.
+- **Wallet transaction ceilings are unknown and may be low enough** that the yearly plan is simply unpayable on the domestic rails. That constrains the plan catalogue, not just the adapter.
 
 **Cost of getting it wrong:** margin destroyed, or app rejected at review.
 

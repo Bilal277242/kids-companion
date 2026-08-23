@@ -165,6 +165,31 @@ export const validationFailed = (details: readonly ValidationDetail[], cause?: u
  * confirming existence to an unauthorised caller is itself a disclosure — parent
  * A asking for parent B's child gets a 404. See docs/API_CONVENTIONS.md §4.3.
  */
+/**
+ * The caller is at fault, and the framework already said so.
+ *
+ * Fastify throws for a malformed body, an unsupported media type, an empty
+ * body, and an oversized one — all with a 4xx `statusCode` and none with a
+ * `validation` array. Without this they fall through to INTERNAL_ERROR, which
+ * blames us for the caller's mistake, logs at `error`, and counts toward the
+ * 5xx rate that alerting watches.
+ *
+ * The status is preserved rather than flattened to 400: 413 and 415 tell a
+ * client something 400 does not.
+ */
+export const clientFault = (httpStatus: number, reason: string, cause?: unknown): AppError =>
+  new AppError({
+    code: 'VALIDATION_FAILED',
+    category: 'validation',
+    // Clamped to the 4xx range. A thrown error's own status is only trusted as
+    // far as "the caller is at fault"; anything else becomes a plain 400.
+    httpStatus: httpStatus >= 400 && httpStatus < 500 ? httpStatus : 400,
+    message: 'That request could not be read.',
+    context: { reason },
+    clientContext: { reason },
+    cause,
+  });
+
 export const notFound = (): AppError =>
   new AppError({
     code: 'RESOURCE_NOT_FOUND',

@@ -1,0 +1,104 @@
+# Staging — production-shaped, synthetic data.
+#
+# Runs on a push to main, after CI, and can be dispatched by hand for a specific
+# commit. Staging is where an image earns the right to be promoted: the digest
+# deployed here is the digest production later runs, never a rebuild.
+#
+# STAGING MUST NEVER CONTAIN PRODUCTION DATA. Child voice and transcripts cannot
+# be meaningfully anonymised, so they are never copied out of production
+# (PRIVACY.md §11).
+
+name: Deploy — staging
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Commit SHA to deploy (defaults to the current main).
+        required: false
+        type: string
+
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    uses: ./.github/workflows/build-images.yml
+    with:
+      ref: ${{ inputs.ref || github.sha }}
+
+  deploy:
+    name: Deploy
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: staging
+      url: ${{ vars.STAGING_URL }}
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      # ═══════════════════════════════════════════════════════════════════════
+      # THE SAFEGUARD THAT MATTERS MOST ON A DEPLOY
+      # ═══════════════════════════════════════════════════════════════════════
+      #
+      # What is about to change is printed BEFORE anything changes. Versions
+      # only — never a row, never the connection string. When a deploy goes
+      # wrong this is the first thing anyone reads, and it needs to already be
+      # in the log rather than reconstructed afterwards.
+      - name: Pending migrations
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DATABASE_SSL_MODE: require
+        run: pnpm db:status
+
+      - name: Apply migrations
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DATABASE_SSL_MODE: require
+        run: pnpm db:migrate
+
+      - name: Release
+        env:
+          API_IMAGE: ${{ needs.build.outputs.api-image }}
+          WEB_IMAGE: ${{ needs.build.outputs.web-image }}
+          DEPLOY_TARGET: ${{ vars.STAGING_DEPLOY_TARGET }}
+        run: ./infra/scripts/release.sh staging
+
+      - name: Verify the deployment answers
+        env:
+          BASE_URL: ${{ vars.STAGING_URL }}
+        run: ./infra/scripts/verify-release.sh
+
+      # Recorded so a production promotion can name the exact digest staging
+      # verified, rather than "whatever main was that afternoon".
+      - name: Record the verified digests
+        run: |
+          {
+            echo "### Verified in staging"
+            echo
+            echo "Commit: \`${{ inputs.ref || github.sha }}\`"
+            echo
+            echo "- API: \`${{ needs.build.outputs.api-image }}\`"
+            echo "- Web: \`${{ needs.build.outputs.web-image }}\`"
+            echo
+            echo "Promote with **Deploy — production**, passing this commit SHA."
+          } >> "$GITHUB_STEP_SUMMARY"

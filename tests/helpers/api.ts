@@ -2,12 +2,22 @@ import { fileURLToPath } from 'node:url';
 
 import { PGlite } from '@electric-sql/pglite';
 import type { AIProvider } from '@kids/ai';
+import type { MetricsRegistry } from '@kids/analytics';
 import { parseConfig } from '@kids/config';
 import { applyMigrations, loadMigrations, type Database, type Queryable } from '@kids/db';
+import {
+  createRailRegistry,
+  type MobileStore,
+  type RailRegistry,
+  type StoreBillingProvider,
+  type SubscriptionProvider,
+} from '@kids/payments';
 import type { SpeechAnalysisProvider } from '@kids/practice';
 import type { SpeechToTextProvider, TextToSpeechProvider } from '@kids/voice';
 
 import { buildApp, type App } from '../../apps/api/src/app.js';
+import { createAuditLogger } from '../../apps/api/src/audit.js';
+import { createPaymentStore, type PaymentStore } from '../../apps/api/src/payment-store.js';
 
 /**
  * A real API instance over a real database, for integration tests.
@@ -58,9 +68,40 @@ export const pgliteDatabase = (db: PGlite): Database => ({
   },
 });
 
+/**
+ * Watches, counts, and optionally breaks database traffic.
+ *
+ * The counter answers "how many statements did that request run?", which is the
+ * only cheap way to catch an N+1 before it is a production incident. The fault
+ * injector answers "what does this endpoint do when the database is gone?",
+ * which is the least-exercised path in any application precisely because
+ * provoking it normally means breaking something real.
+ */
+export interface DatabaseProbe {
+  /** Statements executed since the last reset. */
+  count(): number;
+  /** Every statement since the last reset, for diagnosing an N+1. */
+  statements(): readonly string[];
+  reset(): void;
+  /** Makes every subsequent query fail, as an unreachable database would. */
+  fail(message?: string): void;
+  /** Restores normal service. */
+  heal(): void;
+}
+
 export interface ApiHarness {
   readonly app: App;
   readonly db: PGlite;
+  /**
+   * The payment store, for driving payments outside a request.
+   *
+   * Reconciliation has no HTTP route — it is a sweep — so a test that cannot
+   * reach it cannot cover the case where a customer paid and was never
+   * credited.
+   */
+  readonly paymentStore: PaymentStore;
+  /** See {@link DatabaseProbe}. */
+  readonly database: DatabaseProbe;
   /** Advances the clock the app sees, for expiry tests. */
   setNow(date: Date): void;
   close(): Promise<void>;
@@ -78,9 +119,85 @@ export interface HarnessOptions {
   readonly sttProvider?: SpeechToTextProvider;
   readonly ttsProvider?: TextToSpeechProvider;
   readonly analysisProvider?: SpeechAnalysisProvider;
+  /**
+   * Replaces the payment rail.
+   *
+   * Needed to drive a rail that REFUSES — a cancellation the vendor rejects, an
+   * outage mid-checkout. Webhook tests do not need it: they sign their own
+   * requests with the same secret the default mock rail verifies against, so
+   * they exercise real verification rather than a bypass.
+   */
+  readonly subscriptionProvider?: SubscriptionProvider;
+  /**
+   * Replaces the payment rail registry.
+   *
+   * The default harness has NO rails, which is the product's default state and
+   * the one most worth testing. A suite that needs a rail builds its own.
+   */
+  readonly railRegistry?: RailRegistry;
+  /**
+   * Replaces the mobile store providers.
+   *
+   * The default harness has none, which is the product default and the state
+   * most worth testing: app-store billing being absent must change nothing.
+   */
+  readonly storeProviders?: readonly (readonly [MobileStore, StoreBillingProvider])[];
+  /**
+   * Replaces the metrics registry.
+   *
+   * Injected so a suite can read back exactly what was recorded — above all,
+   * that nothing identifying ever reached a label.
+   */
+  readonly metricsRegistry?: MetricsRegistry;
   /** Extra config overrides, for limit and rate-limit tests. */
   readonly env?: Readonly<Record<string, string>>;
 }
+
+/** Wraps a Database so a test can count its traffic and cut it off. */
+export const instrumentDatabase = (
+  inner: Database,
+): { database: Database; probe: DatabaseProbe } => {
+  let statements: string[] = [];
+  let failure: string | undefined;
+
+  const guard = (sql: string): void => {
+    statements.push(sql.replace(/\s+/g, ' ').trim().slice(0, 120));
+    if (failure !== undefined) throw new Error(failure);
+  };
+
+  const database: Database = {
+    query: async (sql, params) => {
+      guard(sql);
+      return await inner.query(sql, params);
+    },
+    transaction: async (fn) =>
+      await inner.transaction(async (tx) => {
+        return await fn({
+          query: async (sql, params) => {
+            guard(sql);
+            return await tx.query(sql, params);
+          },
+        });
+      }),
+  };
+
+  return {
+    database,
+    probe: {
+      count: () => statements.length,
+      statements: () => [...statements],
+      reset: () => {
+        statements = [];
+      },
+      fail: (message = 'database is unreachable') => {
+        failure = message;
+      },
+      heal: () => {
+        failure = undefined;
+      },
+    },
+  };
+};
 
 export const createApiHarness = async (options: HarnessOptions = {}): Promise<ApiHarness> => {
   const pg = await PGlite.create();
@@ -128,20 +245,38 @@ export const createApiHarness = async (options: HarnessOptions = {}): Promise<Ap
     ...options.env,
   });
 
+  const { database: instrumented, probe } = instrumentDatabase(pgliteDatabase(pg));
+
   const app = await buildApp({
     config,
-    db: pgliteDatabase(pg),
+    db: instrumented,
     now: () => current,
     ...(options.aiProvider ? { aiProvider: options.aiProvider } : {}),
     ...(options.sttProvider ? { sttProvider: options.sttProvider } : {}),
     ...(options.ttsProvider ? { ttsProvider: options.ttsProvider } : {}),
     ...(options.analysisProvider ? { analysisProvider: options.analysisProvider } : {}),
+    ...(options.subscriptionProvider ? { subscriptionProvider: options.subscriptionProvider } : {}),
+    ...(options.railRegistry ? { railRegistry: options.railRegistry } : {}),
+    ...(options.storeProviders ? { storeProviders: options.storeProviders } : {}),
+    ...(options.metricsRegistry ? { metricsRegistry: options.metricsRegistry } : {}),
   });
   await app.ready();
+
+  // Built over the same database and registry the app uses, so a sweep driven
+  // from a test sees exactly what the running application would.
+  const paymentStore = createPaymentStore({
+    db: instrumented,
+    registry: options.railRegistry ?? createRailRegistry({ enabled: [] }),
+    audit: createAuditLogger(pgliteDatabase(pg)),
+    clock: { now: () => current.getTime(), nowIso: () => current.toISOString() as never },
+    reconcileAfterMinutes: 15,
+  });
 
   return {
     app,
     db: pg,
+    paymentStore,
+    database: probe,
     setNow: (date) => {
       current = date;
     },
@@ -264,3 +399,16 @@ export const queryAsParent = async <T = Record<string, unknown>>(
     await harness.db.exec('rollback');
   }
 };
+
+/* -------------------------------------------------------------------------- */
+/* Payments                                                                    */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The mock rail's webhook secret, as configuration defaults it.
+ *
+ * Exported so a suite signs its webhooks the way the rail would. An assertion
+ * that a forged signature is rejected only means something if the accepted case
+ * went through the same verification.
+ */
+export const MOCK_WEBHOOK_SECRET = 'local-mock-webhook-signing-key';

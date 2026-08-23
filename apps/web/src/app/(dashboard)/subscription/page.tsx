@@ -1,5 +1,22 @@
-import { Card, ErrorState, InfoBanner, PageHeader, Pill } from '../../../components/ui';
-import { getSubscription } from '../../../lib/api';
+import { revalidatePath } from 'next/cache';
+import { redirect } from 'next/navigation';
+
+import {
+  Card,
+  ErrorBanner,
+  ErrorState,
+  InfoBanner,
+  PageHeader,
+  Pill,
+  SuccessBanner,
+  WarningBanner,
+} from '../../../components/ui';
+import {
+  cancelSubscription,
+  getPlans,
+  getSubscriptionStatus,
+  resumeSubscription,
+} from '../../../lib/api';
 import { count, longDate } from '../../../lib/format';
 
 export const dynamic = 'force-dynamic';
@@ -7,15 +24,19 @@ export const dynamic = 'force-dynamic';
 /**
  * Subscription.
  *
- * A statement of what the account is on, not a checkout. Payment happens through
- * the app store or the wallet a parent signed up with, and this page says so
- * rather than collecting a card — the rails available in Pakistan are still open
- * (Q-02), and a web form that took card details would need to be PCI scope this
- * product does not want.
+ * A statement of what the account is on, and two buttons. Not a checkout —
+ * payment happens through the app store or wallet a parent signed up with, and
+ * this page says so rather than collecting a card. The rails available in
+ * Pakistan are still open (Q-02), and a web form taking card details would put
+ * this application in PCI scope it has been carefully designed to stay out of.
  *
- * There is no card number here because there is no card number stored. The
- * `subscriptions` table has a vendor token, a brand, and four digits, and that
- * is the whole of it.
+ * There is no card number here because there is no card number stored anywhere.
+ * `subscriptions` holds an opaque vendor token, a brand, and four digits.
+ *
+ * ONE THING WORTH NOTICING: this page renders `status.explanation`, written by
+ * the API, rather than deriving its own sentence from the status code. The
+ * mobile app and a support agent reading the API see the same words, which is
+ * what stops "past due" meaning three different things in three places.
  */
 
 const money = (minor: number, currency: string): string => {
@@ -24,29 +45,72 @@ const money = (minor: number, currency: string): string => {
   return `${currency} ${major}`;
 };
 
-const STATUS_WORDS: Record<string, string> = {
+const INTERVAL_WORD: Record<string, string> = {
+  week: 'a week',
+  month: 'a month',
+  year: 'a year',
+};
+
+const STATUS_LABEL: Record<string, string> = {
   free: 'Free plan',
   trialing: 'Free trial',
   active: 'Active',
-  past_due: 'Payment failed',
+  grace: 'Payment needs attention',
+  past_due: 'Payment outstanding',
   cancelled: 'Cancelled',
-  expired: 'Expired',
+  expired: 'Ended',
 };
 
-export default async function SubscriptionPage() {
-  const result = await getSubscription();
+const ERRORS: Record<string, string> = {
+  cancel: 'We could not cancel your plan just now. Nothing has changed — please try again.',
+  resume: 'We could not restart your plan just now. Nothing has changed — please try again.',
+};
 
-  if (result.state !== 'ok') {
+export default async function SubscriptionPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const params = await searchParams;
+  const [status, plans] = await Promise.all([getSubscriptionStatus(), getPlans()]);
+
+  if (status.state !== 'ok') {
     return (
       <>
         <PageHeader title="Subscription" />
-        <ErrorState message={result.state === 'error' ? result.message : 'Please sign in again.'} />
+        <ErrorState message={status.state === 'error' ? status.message : 'Please sign in again.'} />
       </>
     );
   }
 
-  const { plan, limits, renewal, paymentMethod, childProfilesUsed, availablePlans, note } =
-    result.data;
+  const data = status.data;
+  const catalogue = plans.state === 'ok' ? plans.data.items : [];
+  const saved = typeof params.saved === 'string' ? params.saved : undefined;
+  const failure = typeof params.error === 'string' ? ERRORS[params.error] : undefined;
+
+  const cancel = async (): Promise<void> => {
+    'use server';
+
+    const result = await cancelSubscription();
+    if (result.state !== 'ok') redirect('/subscription?error=cancel');
+
+    revalidatePath('/subscription');
+    revalidatePath('/dashboard');
+    redirect('/subscription?saved=cancelled');
+  };
+
+  const resume = async (): Promise<void> => {
+    'use server';
+
+    const result = await resumeSubscription();
+    if (result.state !== 'ok') redirect('/subscription?error=resume');
+
+    revalidatePath('/subscription');
+    revalidatePath('/dashboard');
+    redirect('/subscription?saved=resumed');
+  };
+
+  const { plan, limits } = { plan: data.plan, limits: data.plan.limits };
 
   return (
     <>
@@ -55,12 +119,23 @@ export default async function SubscriptionPage() {
         description="What your account is on today, and what it allows."
       />
 
-      {plan.status === 'past_due' && (
-        <InfoBanner>
-          Your last payment did not go through. Your family keeps access for now — we do not cut a
-          child off mid-conversation over a failed card — but the plan will fall back to free if it
-          is not resolved.
-        </InfoBanner>
+      {saved === 'cancelled' && (
+        <SuccessBanner>
+          Your plan will not renew. Everything keeps working until{' '}
+          {data.currentPeriodEnd === null
+            ? 'the end of your paid period'
+            : longDate(data.currentPeriodEnd)}
+          .
+        </SuccessBanner>
+      )}
+      {saved === 'resumed' && <SuccessBanner>Your plan is active again.</SuccessBanner>}
+      {failure !== undefined && <ErrorBanner>{failure}</ErrorBanner>}
+
+      {data.status === 'grace' && (
+        <WarningBanner>
+          {data.explanation}
+          {data.graceEndsAt !== null && ` You have until ${longDate(data.graceEndsAt)}.`}
+        </WarningBanner>
       )}
 
       <div className="stack">
@@ -72,8 +147,8 @@ export default async function SubscriptionPage() {
               </p>
               <p className="small muted">{plan.description}</p>
             </div>
-            <Pill tone={plan.tier === 'paid' ? 'active' : 'neutral'}>
-              {STATUS_WORDS[plan.status] ?? plan.status}
+            <Pill tone={data.entitled && plan.tier === 'paid' ? 'active' : 'neutral'}>
+              {STATUS_LABEL[data.status] ?? data.status}
             </Pill>
           </div>
 
@@ -82,45 +157,64 @@ export default async function SubscriptionPage() {
               <dt className="small muted">Price</dt>
               <dd className="small" style={{ margin: 0 }}>
                 {money(plan.priceMinor, plan.currency)}
-                {plan.priceMinor > 0 && plan.billingInterval !== 'none'
-                  ? ` a ${plan.billingInterval}`
-                  : ''}
+                {plan.priceMinor > 0 ? ` ${INTERVAL_WORD[plan.billingInterval] ?? ''}` : ''}
               </dd>
             </div>
-            {renewal.trialEndsAt !== null && (
+
+            {data.trialEndsAt !== null && data.status === 'trialing' && (
               <div className="row" style={{ justifyContent: 'space-between' }}>
                 <dt className="small muted">Trial ends</dt>
                 <dd className="small" style={{ margin: 0 }}>
-                  {longDate(renewal.trialEndsAt)}
+                  {longDate(data.trialEndsAt)}
                 </dd>
               </div>
             )}
-            {renewal.currentPeriodEnd !== null && (
+
+            {data.currentPeriodEnd !== null && (
               <div className="row" style={{ justifyContent: 'space-between' }}>
                 <dt className="small muted">
-                  {renewal.cancelAt === null ? 'Renews' : 'Access until'}
+                  {data.status === 'cancelled' ? 'Access until' : 'Renews'}
                 </dt>
                 <dd className="small" style={{ margin: 0 }}>
-                  {longDate(renewal.currentPeriodEnd)}
+                  {longDate(data.currentPeriodEnd)}
                 </dd>
               </div>
             )}
-            {paymentMethod.last4 !== null && (
+
+            {data.paymentMethod.last4 !== null && (
               <div className="row" style={{ justifyContent: 'space-between' }}>
                 <dt className="small muted">Paid with</dt>
                 <dd className="small" style={{ margin: 0 }}>
-                  {`${paymentMethod.brand ?? 'card'} ending ${paymentMethod.last4}`}
+                  {`${data.paymentMethod.brand ?? 'card'} ending ${data.paymentMethod.last4}`}
                 </dd>
               </div>
             )}
           </dl>
 
-          <p className="stat-explain">{note}</p>
+          <p className="stat-explain">{data.explanation}</p>
           <p className="stat-caveat">
             We never see or store your full card number. Our payment provider holds it and gives us
             a token, a brand, and the last four digits — enough for you to recognise which card, and
             nothing more.
           </p>
+
+          {plan.tier === 'paid' && data.status !== 'expired' && (
+            <div className="row" style={{ marginTop: 'var(--space-4)' }}>
+              {data.status === 'cancelled' ? (
+                <form action={resume}>
+                  <button className="button" type="submit">
+                    Restart my plan
+                  </button>
+                </form>
+              ) : (
+                <form action={cancel}>
+                  <button className="button button-secondary" type="submit">
+                    Cancel my plan
+                  </button>
+                </form>
+              )}
+            </div>
+          )}
         </Card>
 
         <Card title="What this plan allows">
@@ -137,7 +231,7 @@ export default async function SubscriptionPage() {
                 <tr>
                   <th scope="row">Child profiles</th>
                   <td>
-                    {`${String(childProfilesUsed)} of ${String(limits.childProfileLimit)} used`}
+                    {`${String(data.childProfilesUsed)} of ${String(limits.childProfileLimit)} used`}
                   </td>
                 </tr>
                 <tr>
@@ -160,7 +254,7 @@ export default async function SubscriptionPage() {
                   <th scope="row">Talking out loud</th>
                   <td>
                     {limits.voiceEnabled
-                      ? count(limits.dailyVoiceTurnLimit, 'voice message') + ' a day'
+                      ? `${count(limits.dailyVoiceTurnLimit, 'voice message')} a day`
                       : 'Not on this plan'}
                   </td>
                 </tr>
@@ -173,7 +267,7 @@ export default async function SubscriptionPage() {
           </p>
         </Card>
 
-        {availablePlans.length > 1 && (
+        {catalogue.length > 1 && (
           <Card title="All plans">
             <div className="table-wrap">
               <table>
@@ -184,10 +278,11 @@ export default async function SubscriptionPage() {
                     <th scope="col">Price</th>
                     <th scope="col">Children</th>
                     <th scope="col">Minutes a day</th>
+                    <th scope="col">Free trial</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {availablePlans.map((option) => (
+                  {catalogue.map((option) => (
                     <tr key={option.code}>
                       <th scope="row">
                         {option.displayName}
@@ -199,23 +294,42 @@ export default async function SubscriptionPage() {
                         )}
                       </th>
                       <td>{money(option.priceMinor, option.currency)}</td>
-                      <td>{String(option.childProfileLimit)}</td>
+                      <td>{String(option.limits.childProfileLimit)}</td>
                       <td>
-                        {option.dailyMinuteLimit === 0
+                        {option.limits.dailyMinuteLimit === 0
                           ? 'No limit'
-                          : String(option.dailyMinuteLimit)}
+                          : String(option.limits.dailyMinuteLimit)}
+                      </td>
+                      <td>
+                        {option.trialDays === 0
+                          ? '—'
+                          : data.trialAvailable
+                            ? count(option.trialDays, 'day')
+                            : 'Already used'}
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
-            <p className="stat-explain">
+            <InfoBanner>
               To change plan, use the app store or payment provider you signed up with. We do not
               take card details on this page.
-            </p>
+            </InfoBanner>
           </Card>
         )}
+
+        <Card title="If a payment fails">
+          <p className="small">
+            Nothing switches off on the day a card is declined. Every paid plan has a grace period —{' '}
+            {plan.graceDays === 0 ? 'set per plan' : count(plan.graceDays, 'day')} on yours — during
+            which your family keeps full access while you sort the payment out.
+          </p>
+          <p className="stat-caveat">
+            We do this because the person who loses access is a child who had nothing to do with the
+            card. Conversations, progress, and profiles are never deleted for non-payment.
+          </p>
+        </Card>
       </div>
     </>
   );

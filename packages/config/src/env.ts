@@ -121,6 +121,29 @@ const dataSchema = z.object({
   REDIS_KEY_PREFIX: z.string().min(1).default('kc:local:'),
   QUEUE_CONCURRENCY: intFromEnv({ min: 1 }).default(5),
   QUEUE_MAX_ATTEMPTS: intFromEnv({ min: 1 }).default(3),
+
+  /**
+   * Per-dependency deadline for `GET /ready`.
+   *
+   * Bounded well below any orchestrator's own probe timeout. A readiness check
+   * that can outlast the timeout it is answering turns a slow dependency into a
+   * restart loop.
+   */
+  READINESS_PROBE_TIMEOUT_MS: intFromEnv({ min: 100, max: 10_000 }).default(2_000),
+
+  /* --- Background worker ---------------------------------------------------
+   * The sweeps are backstops, not the primary path: entitlement is computed
+   * from timestamps on read, and audio is deleted inline when a turn ends. They
+   * exist to repair what a crash or a dropped vendor callback left behind, so
+   * the intervals are minutes, not seconds. */
+
+  /** A liveness port for the worker. It serves `/health` and nothing else. */
+  WORKER_PORT: intFromEnv({ min: 1, max: 65_535 }).default(8081),
+  WORKER_SUBSCRIPTION_SWEEP_INTERVAL_MS: intFromEnv({ min: 10_000 }).default(300_000),
+  WORKER_PAYMENT_RECONCILE_INTERVAL_MS: intFromEnv({ min: 10_000 }).default(300_000),
+  WORKER_STORE_SYNC_INTERVAL_MS: intFromEnv({ min: 10_000 }).default(3_600_000),
+  /** The retention backstop. Deletes child audio whose retention has elapsed. */
+  WORKER_AUDIO_SWEEP_INTERVAL_MS: intFromEnv({ min: 10_000 }).default(900_000),
 });
 
 const authSchema = z.object({
@@ -194,6 +217,10 @@ const providerSchema = z.object({
   SPEECH_ANALYSIS_PROVIDER: z.enum(['transcription', 'mock']).default('mock'),
   SPEECH_ANALYSIS_TIMEOUT_MS: intFromEnv({ min: 1_000 }).default(10_000),
   RATE_LIMIT_PRACTICE_PER_MINUTE: intFromEnv({ min: 1 }).default(30),
+  // Opening a checkout is cheap for us and expensive for a rail. Bounded per
+  // hour rather than per minute: a parent legitimately retries a failed
+  // checkout a few times, and never a hundred.
+  RATE_LIMIT_CHECKOUT_PER_HOUR: intFromEnv({ min: 1 }).default(20),
   STT_TIMEOUT_MS: intFromEnv({ min: 1_000 }).default(10_000),
   STT_LANGUAGE_HINTS: csvFromEnv.default(['en-US', 'ur-PK']),
   DEEPGRAM_API_KEY: z.string().optional(),
@@ -204,9 +231,108 @@ const providerSchema = z.object({
   ELEVENLABS_API_KEY: z.string().optional(),
 
   PAYMENTS_ENABLED: boolFromEnv.default(false),
+  // Which rail collects money. `mock` implements the real signature scheme
+  // against a local secret; it is refused outright in a deployed environment,
+  // because a mock rail in production is a free-subscription button.
+  PAYMENTS_PROVIDER: z.enum(['stripe', 'mock']).default('mock'),
   PAYMENTS_DEFAULT_CURRENCY: z.string().length(3).default('PKR'),
+  // How old a signed webhook timestamp may be. Stripe's own default is five
+  // minutes. Without a window, a request captured once is valid forever.
+  PAYMENTS_WEBHOOK_TOLERANCE_SECONDS: intFromEnv({ min: 30, max: 3_600 }).default(300),
+  // The mock rail's HMAC key. Not a secret in any meaningful sense — it exists
+  // so local and CI exercise signature verification rather than skipping it.
+  PAYMENTS_MOCK_WEBHOOK_SECRET: z.string().min(16).default('local-mock-webhook-signing-key'),
+
+  /* --- Rails ---
+   *
+   * EMPTY IS A SUPPORTED STATE. With no rails enabled every family is on the
+   * free tier, every child can still talk, and `POST /subscriptions/create`
+   * says payments are unavailable instead of failing. A children's app must not
+   * be taken down by an unfinished payment integration.
+   */
+  PAYMENTS_ENABLED_RAILS: csvFromEnv.default([]),
+
+  /*
+   * Rails whose wire format has been VERIFIED against the provider's own
+   * documentation and sandbox.
+   *
+   * This is a human attestation, and it is deliberately separate from
+   * "enabled". A rail may be switched on in sandbox for development without
+   * anyone claiming it is finished; a deployed environment refuses to run a
+   * rail that is enabled but not on this list. That is what makes "do not claim
+   * production-ready until verified" a boot failure rather than a comment.
+   */
+  PAYMENTS_VERIFIED_RAILS: csvFromEnv.default([]),
+
+  /* Sandbox callback signing. Local and CI only — a real rail brings its own. */
+  PAYMENTS_SANDBOX_CALLBACK_SECRET: z.string().min(16).default('local-sandbox-rail-signing-key'),
+  /* How long a payment may sit without a final answer before we ask the rail. */
+  PAYMENTS_RECONCILE_AFTER_MINUTES: intFromEnv({ min: 1, max: 1_440 }).default(15),
+
   STRIPE_SECRET_KEY: z.string().optional(),
   STRIPE_WEBHOOK_SECRET: z.string().optional(),
+
+  /* --- Pakistan rails ---
+   *
+   * Credentials only. Nothing here says how a request is signed or where it is
+   * sent: those come from each provider's documentation and are unverified.
+   * Every value is empty in `.env.example` and comes from the environment.
+   */
+  JAZZCASH_MERCHANT_ID: z.string().optional(),
+  JAZZCASH_PASSWORD: z.string().optional(),
+  JAZZCASH_INTEGRITY_SALT: z.string().optional(),
+  JAZZCASH_MODE: z.enum(['sandbox', 'live']).default('sandbox'),
+
+  EASYPAISA_STORE_ID: z.string().optional(),
+  EASYPAISA_HASH_KEY: z.string().optional(),
+  EASYPAISA_MODE: z.enum(['sandbox', 'live']).default('sandbox'),
+
+  /* Carrier billing reaches customers through an aggregator. None chosen yet. */
+  CARRIER_BILLING_AGGREGATOR: z.string().optional(),
+  CARRIER_BILLING_MERCHANT_ID: z.string().optional(),
+  CARRIER_BILLING_API_KEY: z.string().optional(),
+  CARRIER_BILLING_CALLBACK_SECRET: z.string().optional(),
+  CARRIER_BILLING_MODE: z.enum(['sandbox', 'live']).default('sandbox'),
+
+  /* Cards. The processor is configuration; this application never sees a PAN. */
+  CARD_PROCESSOR: z.string().optional(),
+  CARD_SECRET_KEY: z.string().optional(),
+  CARD_WEBHOOK_SECRET: z.string().optional(),
+  CARD_MODE: z.enum(['sandbox', 'live']).default('sandbox'),
+
+  /* --- Mobile store billing ---
+   *
+   * NONE OF THESE IS EVER SHIPPED IN THE MOBILE APPLICATION. The app receives a
+   * purchase token from the store SDK and sends it to this server; the server
+   * holds the credentials that verify it. A key in an app bundle is a key an
+   * attacker has, and both stores' verification APIs are server-to-server for
+   * exactly that reason.
+   */
+  STORE_BILLING_ENABLED_STORES: csvFromEnv.default([]),
+  /* Stores whose adapter has been verified against the store's own current
+   * documentation and sandbox. Same attestation model as the payment rails: a
+   * deployed environment refuses to run an enabled-but-unverified store. */
+  STORE_BILLING_VERIFIED_STORES: csvFromEnv.default([]),
+  /* `mock` runs a real verification service locally — one that can say no. */
+  STORE_BILLING_PROVIDER: z.enum(['live', 'mock']).default('mock'),
+  STORE_BILLING_MOCK_SECRET: z.string().min(16).default('local-store-notification-key'),
+  /* Which store environment this deployment accepts purchases from. A sandbox
+   * purchase honoured in production is a free subscription for anyone with a
+   * test account. */
+  STORE_BILLING_ENVIRONMENT: z.enum(['sandbox', 'production']).default('sandbox'),
+  /* Notifications are unreliable, not absent. This is how stale a purchase may
+   * get before we ask the store again regardless. */
+  STORE_BILLING_SYNC_AFTER_HOURS: intFromEnv({ min: 1, max: 168 }).default(24),
+
+  APPLE_IAP_ISSUER_ID: z.string().optional(),
+  APPLE_IAP_KEY_ID: z.string().optional(),
+  APPLE_IAP_PRIVATE_KEY: z.string().optional(),
+  APPLE_IAP_BUNDLE_ID: z.string().optional(),
+  APPLE_IAP_SHARED_SECRET: z.string().optional(),
+
+  GOOGLE_PLAY_PACKAGE_NAME: z.string().optional(),
+  GOOGLE_PLAY_SERVICE_ACCOUNT_JSON: z.string().optional(),
+  GOOGLE_PLAY_NOTIFICATION_TOPIC: z.string().optional(),
 });
 
 const quotaSchema = z.object({
@@ -283,11 +409,103 @@ export const envSchema = baseSchema.superRefine((env, ctx) => {
   if (env.TTS_PROVIDER === 'elevenlabs' && !env.ELEVENLABS_API_KEY) {
     issue('ELEVENLABS_API_KEY', 'is required when TTS_PROVIDER=elevenlabs');
   }
-  if (env.PAYMENTS_ENABLED && !env.STRIPE_WEBHOOK_SECRET) {
+  /* --- Mobile stores ---
+   *
+   * The same attestation gate as the payment rails, and it matters more here: a
+   * store adapter that misbehaves does not merely fail a payment, it fails app
+   * review — and app review is not a retry loop.
+   */
+  {
+    const knownStores = new Set(['apple_iap', 'google_play']);
+
+    for (const store of env.STORE_BILLING_ENABLED_STORES) {
+      if (!knownStores.has(store)) {
+        issue('STORE_BILLING_ENABLED_STORES', `"${store}" is not a mobile store`);
+      }
+    }
+
+    if (isDeployed) {
+      if (env.STORE_BILLING_PROVIDER === 'mock' && env.STORE_BILLING_ENABLED_STORES.length > 0) {
+        issue(
+          'STORE_BILLING_PROVIDER',
+          `must not be "mock" when APP_ENV=${env.APP_ENV} — it grants subscriptions nobody paid for`,
+        );
+      }
+
+      const verifiedStores = new Set(env.STORE_BILLING_VERIFIED_STORES);
+      for (const store of env.STORE_BILLING_ENABLED_STORES) {
+        if (!verifiedStores.has(store)) {
+          issue(
+            'STORE_BILLING_ENABLED_STORES',
+            `"${store}" is enabled but not listed in STORE_BILLING_VERIFIED_STORES — ` +
+              'its integration has not been verified against the store’s own ' +
+              'documentation and sandbox',
+          );
+        }
+      }
+
+      if (
+        env.STORE_BILLING_ENABLED_STORES.length > 0 &&
+        env.STORE_BILLING_ENVIRONMENT !== 'production'
+      ) {
+        issue(
+          'STORE_BILLING_ENVIRONMENT',
+          `must be "production" when APP_ENV=${env.APP_ENV} — honouring sandbox ` +
+            'purchases in production is a free subscription for anyone with a test account',
+        );
+      }
+    }
+  }
+
+  /* --- Rails ---
+   *
+   * A rail switched on must be a rail we know about, and a rail running live in
+   * a deployed environment must have been verified by a person. The alternative
+   * is an integration built from guesswork taking real money.
+   */
+  {
+    const known = new Set([
+      'card',
+      'stripe',
+      'jazzcash',
+      'easypaisa',
+      'carrier_billing',
+      'apple_iap',
+      'google_play',
+      'mock',
+    ]);
+
+    for (const rail of env.PAYMENTS_ENABLED_RAILS) {
+      if (!known.has(rail)) issue('PAYMENTS_ENABLED_RAILS', `"${rail}" is not a payment rail`);
+    }
+
+    if (isDeployed) {
+      const verified = new Set(env.PAYMENTS_VERIFIED_RAILS);
+      for (const rail of env.PAYMENTS_ENABLED_RAILS) {
+        if (rail === 'mock') {
+          issue('PAYMENTS_ENABLED_RAILS', `"mock" must not be enabled when APP_ENV=${env.APP_ENV}`);
+          continue;
+        }
+        if (!verified.has(rail)) {
+          issue(
+            'PAYMENTS_ENABLED_RAILS',
+            `"${rail}" is enabled but not listed in PAYMENTS_VERIFIED_RAILS — ` +
+              'its wire format has not been verified against the provider’s own ' +
+              'documentation and sandbox, and it must not take real money',
+          );
+        }
+      }
+    }
+  }
+
+  if (env.PAYMENTS_PROVIDER === 'stripe' && !env.STRIPE_WEBHOOK_SECRET) {
     issue(
       'STRIPE_WEBHOOK_SECRET',
-      'is required when PAYMENTS_ENABLED=true — an unverified webhook endpoint grants free subscriptions',
+      'is required when PAYMENTS_PROVIDER=stripe — an unverified webhook endpoint grants free subscriptions',
     );
+  }
+  if (env.PAYMENTS_PROVIDER === 'stripe' && !env.STRIPE_SECRET_KEY) {
+    issue('STRIPE_SECRET_KEY', 'is required when PAYMENTS_PROVIDER=stripe');
   }
   if (env.ANALYTICS_ENABLED && !env.ANALYTICS_WRITE_KEY) {
     issue('ANALYTICS_WRITE_KEY', 'is required when ANALYTICS_ENABLED=true');
@@ -295,6 +513,11 @@ export const envSchema = baseSchema.superRefine((env, ctx) => {
 
   /* --- Transport security in any deployed environment --- */
   if (isDeployed) {
+    // A mock payment rail outside local and ci is a subscription anyone can
+    // grant themselves: its signing key is a documented default.
+    if (env.PAYMENTS_PROVIDER === 'mock') {
+      issue('PAYMENTS_PROVIDER', `must not be "mock" when APP_ENV=${env.APP_ENV}`);
+    }
     if (env.DATABASE_SSL_MODE !== 'require') {
       issue('DATABASE_SSL_MODE', `must be "require" when APP_ENV=${env.APP_ENV}`);
     }

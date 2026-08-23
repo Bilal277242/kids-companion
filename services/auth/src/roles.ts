@@ -19,6 +19,7 @@ export const PERMISSIONS = [
   'conversations:read_own',
   'sessions:read_own',
   'sessions:revoke_own',
+  'billing:manage_own',
 
   /* Staff. */
   'accounts:read_any',
@@ -53,6 +54,7 @@ const ROLE_PERMISSIONS: Readonly<Record<Role, readonly Permission[]>> = Object.f
     'conversations:read_own',
     'sessions:read_own',
     'sessions:revoke_own',
+    'billing:manage_own',
   ] as const),
 
   // Support triages the safety queue and answers account questions. It is the

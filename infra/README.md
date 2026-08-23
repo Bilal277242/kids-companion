@@ -11,7 +11,19 @@ infra/
 
 ## docker/
 
-_Phase 1._ Local Postgres and Redis, plus the production API image: non-root, minimal base, no build tooling in the runtime layer, pinned digests, scanned in CI ([SECURITY.md §7](../SECURITY.md)).
+| File                         | Purpose                                                                 |
+| ---------------------------- | ----------------------------------------------------------------------- |
+| `docker-compose.yml`         | Local Postgres and Redis. Weak, well-known credentials on purpose.      |
+| `docker-compose.staging.yml` | Single-host staging: data, migration job, API, worker, dashboard.       |
+| `api.Dockerfile`             | The API, the worker, and the migration job — one image, three commands. |
+| `web.Dockerfile`             | The parent dashboard, from Next's standalone output.                    |
+
+Both images are multi-stage, non-root, with no build tooling and no `.ts` source
+in the runtime layer, and **no secret in any layer** — every credential arrives
+at run time. Image scanning in CI is still outstanding.
+
+Full instructions, and an honest account of what has and has not been executed,
+are in [DEPLOYMENT.md](../DEPLOYMENT.md).
 
 ## migrations/
 

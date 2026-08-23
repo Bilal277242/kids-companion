@@ -10,9 +10,24 @@ describe('roles and permissions', () => {
       'account:delete_own',
       'children:manage_own',
       'conversations:read_own',
+      'billing:manage_own',
     ] as const) {
       expect(hasPermission('parent', permission), permission).toBe(true);
     }
+  });
+
+  /**
+   * Nobody but the account holder touches billing.
+   *
+   * A support agent who can cancel or resume a family's plan is a social
+   * engineering target — "I'm from support, I just need to fix your
+   * subscription" — and an admin who can do it silently is worse. There is no
+   * permission that expresses it, so there is no path to add the button later
+   * without this test failing.
+   */
+  it('gives no staff role any power over a family’s subscription', () => {
+    expect(hasPermission('support', 'billing:manage_own')).toBe(false);
+    expect(hasPermission('admin', 'billing:manage_own')).toBe(false);
   });
 
   it('gives a parent no staff permission', () => {

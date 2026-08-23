@@ -1,4 +1,5 @@
 import {
+  clientFault,
   rateLimited,
   redactObject,
   toAppError,
@@ -92,14 +93,32 @@ const errorBoundaryPlugin: FastifyPluginAsync = async (app) => {
     // that told the client to retry harder. Recognised explicitly here so the
     // limiter produces the same envelope as everything else.
     const status = (error as { statusCode?: unknown }).statusCode;
-    const isRateLimitRejection =
-      status === 429 || (error as { code?: unknown }).code === 'FST_ERR_RATE_LIMIT';
+    const fastifyCode = (error as { code?: unknown }).code;
+    const isRateLimitRejection = status === 429 || fastifyCode === 'FST_ERR_RATE_LIMIT';
+
+    /* The content-type parser family: a body that is not JSON, is the wrong
+     * media type, is empty, or is too large.
+     *
+     * These carry a 4xx status and no `validation` array, so they used to fall
+     * through to INTERNAL_ERROR — blaming us for the caller's mistake, logging
+     * at `error`, and counting toward the 5xx rate that ALERTING WATCHES. A
+     * client posting broken JSON in a loop could page somebody. */
+    const isMalformedBody =
+      typeof fastifyCode === 'string' && fastifyCode.startsWith('FST_ERR_CTP_');
 
     const appError = isSchemaRejection
       ? validationFailed(details, error)
       : isRateLimitRejection
         ? rateLimited(retryAfterSecondsOf(reply))
-        : toAppError(error);
+        : isMalformedBody
+          ? clientFault(
+              typeof status === 'number' ? status : 400,
+              // The Fastify code, not its message: the message can quote the
+              // offending bytes back, and those came from an untrusted caller.
+              String(fastifyCode),
+              error,
+            )
+          : toAppError(error);
 
     // Context is developer-authored and therefore the most likely place for a
     // sensitive field to be added without thinking. Redact before it reaches a log.

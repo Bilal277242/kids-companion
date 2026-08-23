@@ -1023,7 +1023,7 @@ export type PasswordResetsUpdate = Partial<PasswordResetsInsert>;
 /** `public.payment_events` */
 export interface PaymentEventsRow {
   id: string;
-  rail: 'stripe' | 'jazzcash' | 'easypaisa' | 'apple_iap' | 'google_play' | 'mock';
+  rail: 'card' | 'stripe' | 'jazzcash' | 'easypaisa' | 'carrier_billing' | 'apple_iap' | 'google_play' | 'mock';
   external_event_id: string;
   event_type: string;
   signature_verified: boolean;
@@ -1035,11 +1035,15 @@ export interface PaymentEventsRow {
   received_at: string;
   processed_at: string | null;
   created_at: string;
+  delivery_count: number;
+  event_occurred_at: string | null;
+  ignored_reason: string | null;
+  payment_id: string | null;
 }
 
 export interface PaymentEventsInsert {
   id?: string;
-  rail: 'stripe' | 'jazzcash' | 'easypaisa' | 'apple_iap' | 'google_play' | 'mock';
+  rail: 'card' | 'stripe' | 'jazzcash' | 'easypaisa' | 'carrier_billing' | 'apple_iap' | 'google_play' | 'mock';
   external_event_id: string;
   event_type: string;
   signature_verified: boolean;
@@ -1051,9 +1055,107 @@ export interface PaymentEventsInsert {
   received_at?: string;
   processed_at?: string | null;
   created_at?: string;
+  delivery_count?: number;
+  event_occurred_at?: string | null;
+  ignored_reason?: string | null;
+  payment_id?: string | null;
 }
 
 export type PaymentEventsUpdate = Partial<PaymentEventsInsert>;
+
+/** `public.payment_refunds` */
+export interface PaymentRefundsRow {
+  id: string;
+  payment_id: string;
+  parent_id: string;
+  rail: 'card' | 'stripe' | 'jazzcash' | 'easypaisa' | 'carrier_billing' | 'apple_iap' | 'google_play' | 'mock';
+  rail_reference: string | null;
+  idempotency_key: string;
+  status: 'requested' | 'succeeded' | 'failed' | 'unsupported';
+  amount_minor: number;
+  currency: string;
+  reason: string;
+  failure_code: string | null;
+  requested_by: string | null;
+  requested_at: string;
+  completed_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PaymentRefundsInsert {
+  id?: string;
+  payment_id: string;
+  parent_id: string;
+  rail: 'card' | 'stripe' | 'jazzcash' | 'easypaisa' | 'carrier_billing' | 'apple_iap' | 'google_play' | 'mock';
+  rail_reference?: string | null;
+  idempotency_key: string;
+  status?: 'requested' | 'succeeded' | 'failed' | 'unsupported';
+  amount_minor: number;
+  currency: string;
+  reason: string;
+  failure_code?: string | null;
+  requested_by?: string | null;
+  requested_at?: string;
+  completed_at?: string | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export type PaymentRefundsUpdate = Partial<PaymentRefundsInsert>;
+
+/** `public.payments` */
+export interface PaymentsRow {
+  id: string;
+  parent_id: string;
+  subscription_id: string | null;
+  checkout_id: string | null;
+  rail: 'card' | 'stripe' | 'jazzcash' | 'easypaisa' | 'carrier_billing' | 'apple_iap' | 'google_play' | 'mock';
+  status: 'initiated' | 'pending' | 'authorized' | 'captured' | 'failed' | 'cancelled' | 'refunded' | 'unresolved';
+  amount_minor: number;
+  currency: string;
+  rail_reference: string | null;
+  idempotency_key: string;
+  failure_code: string | null;
+  rail_failure_code: string | null;
+  payment_method_brand: string | null;
+  payment_method_last4: string | null;
+  instrument_token: string | null;
+  attempt_count: number;
+  last_checked_at: string | null;
+  reconciled_at: string | null;
+  initiated_at: string;
+  completed_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PaymentsInsert {
+  id?: string;
+  parent_id: string;
+  subscription_id?: string | null;
+  checkout_id?: string | null;
+  rail: 'card' | 'stripe' | 'jazzcash' | 'easypaisa' | 'carrier_billing' | 'apple_iap' | 'google_play' | 'mock';
+  status?: 'initiated' | 'pending' | 'authorized' | 'captured' | 'failed' | 'cancelled' | 'refunded' | 'unresolved';
+  amount_minor: number;
+  currency: string;
+  rail_reference?: string | null;
+  idempotency_key: string;
+  failure_code?: string | null;
+  rail_failure_code?: string | null;
+  payment_method_brand?: string | null;
+  payment_method_last4?: string | null;
+  instrument_token?: string | null;
+  attempt_count?: number;
+  last_checked_at?: string | null;
+  reconciled_at?: string | null;
+  initiated_at?: string;
+  completed_at?: string | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export type PaymentsUpdate = Partial<PaymentsInsert>;
 
 /** `public.practice_exercises` */
 export interface PracticeExercisesRow {
@@ -1257,6 +1359,152 @@ export interface SpeechPracticeInsert {
 
 export type SpeechPracticeUpdate = Partial<SpeechPracticeInsert>;
 
+/** `public.store_notifications` */
+export interface StoreNotificationsRow {
+  id: string;
+  store: 'apple_iap' | 'google_play';
+  notification_id: string;
+  kind: string;
+  original_transaction_id: string | null;
+  environment: 'sandbox' | 'production';
+  signature_verified: boolean;
+  processing_status: 'pending' | 'processed' | 'ignored' | 'failed';
+  processing_error: string | null;
+  ignored_reason: string | null;
+  payload: Json;
+  store_purchase_id: string | null;
+  parent_id: string | null;
+  delivery_count: number;
+  occurred_at: string | null;
+  received_at: string;
+  processed_at: string | null;
+  created_at: string;
+}
+
+export interface StoreNotificationsInsert {
+  id?: string;
+  store: 'apple_iap' | 'google_play';
+  notification_id: string;
+  kind: string;
+  original_transaction_id?: string | null;
+  environment: 'sandbox' | 'production';
+  signature_verified: boolean;
+  processing_status?: 'pending' | 'processed' | 'ignored' | 'failed';
+  processing_error?: string | null;
+  ignored_reason?: string | null;
+  payload?: Json;
+  store_purchase_id?: string | null;
+  parent_id?: string | null;
+  delivery_count?: number;
+  occurred_at?: string | null;
+  received_at?: string;
+  processed_at?: string | null;
+  created_at?: string;
+}
+
+export type StoreNotificationsUpdate = Partial<StoreNotificationsInsert>;
+
+/** `public.store_product_map` */
+export interface StoreProductMapRow {
+  id: string;
+  store: 'apple_iap' | 'google_play';
+  product_id: string;
+  plan_id: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface StoreProductMapInsert {
+  id?: string;
+  store: 'apple_iap' | 'google_play';
+  product_id: string;
+  plan_id: string;
+  is_active?: boolean;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export type StoreProductMapUpdate = Partial<StoreProductMapInsert>;
+
+/** `public.store_purchases` */
+export interface StorePurchasesRow {
+  id: string;
+  parent_id: string;
+  store: 'apple_iap' | 'google_play';
+  original_transaction_id: string;
+  latest_transaction_id: string | null;
+  product_id: string;
+  state: 'active' | 'trial' | 'grace_period' | 'on_hold' | 'paused' | 'cancelled' | 'expired' | 'refunded' | 'invalid';
+  expires_at: string | null;
+  grace_period_ends_at: string | null;
+  auto_renewing: boolean;
+  environment: 'sandbox' | 'production';
+  verified_at: string;
+  subscription_id: string | null;
+  refunded_at: string | null;
+  first_seen_at: string;
+  last_notification_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface StorePurchasesInsert {
+  id?: string;
+  parent_id: string;
+  store: 'apple_iap' | 'google_play';
+  original_transaction_id: string;
+  latest_transaction_id?: string | null;
+  product_id: string;
+  state: 'active' | 'trial' | 'grace_period' | 'on_hold' | 'paused' | 'cancelled' | 'expired' | 'refunded' | 'invalid';
+  expires_at?: string | null;
+  grace_period_ends_at?: string | null;
+  auto_renewing?: boolean;
+  environment: 'sandbox' | 'production';
+  verified_at: string;
+  subscription_id?: string | null;
+  refunded_at?: string | null;
+  first_seen_at?: string;
+  last_notification_at?: string | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export type StorePurchasesUpdate = Partial<StorePurchasesInsert>;
+
+/** `public.subscription_checkouts` */
+export interface SubscriptionCheckoutsRow {
+  id: string;
+  parent_id: string;
+  plan_id: string;
+  rail: 'card' | 'stripe' | 'jazzcash' | 'easypaisa' | 'carrier_billing' | 'apple_iap' | 'google_play' | 'mock';
+  idempotency_key: string;
+  external_id: string | null;
+  status: 'pending' | 'completed' | 'expired' | 'abandoned';
+  expires_at: string;
+  completed_at: string | null;
+  subscription_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SubscriptionCheckoutsInsert {
+  id?: string;
+  parent_id: string;
+  plan_id: string;
+  rail: 'card' | 'stripe' | 'jazzcash' | 'easypaisa' | 'carrier_billing' | 'apple_iap' | 'google_play' | 'mock';
+  idempotency_key: string;
+  external_id?: string | null;
+  status?: 'pending' | 'completed' | 'expired' | 'abandoned';
+  expires_at: string;
+  completed_at?: string | null;
+  subscription_id?: string | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export type SubscriptionCheckoutsUpdate = Partial<SubscriptionCheckoutsInsert>;
+
 /** `public.subscription_plans` */
 export interface SubscriptionPlansRow {
   id: string;
@@ -1266,7 +1514,7 @@ export interface SubscriptionPlansRow {
   tier: 'free' | 'paid';
   price_minor: number;
   currency: string;
-  billing_interval: 'month' | 'year' | 'once' | 'none';
+  billing_interval: 'week' | 'month' | 'year' | 'once' | 'none';
   daily_minute_limit: number;
   child_profile_limit: number;
   weekly_story_limit: number | null;
@@ -1281,6 +1529,8 @@ export interface SubscriptionPlansRow {
   concurrent_conversation_limit: number;
   voice_enabled: boolean;
   daily_voice_turn_limit: number;
+  trial_days: number;
+  grace_days: number;
 }
 
 export interface SubscriptionPlansInsert {
@@ -1291,7 +1541,7 @@ export interface SubscriptionPlansInsert {
   tier: 'free' | 'paid';
   price_minor?: number;
   currency?: string;
-  billing_interval?: 'month' | 'year' | 'once' | 'none';
+  billing_interval?: 'week' | 'month' | 'year' | 'once' | 'none';
   daily_minute_limit: number;
   child_profile_limit: number;
   weekly_story_limit?: number | null;
@@ -1306,6 +1556,8 @@ export interface SubscriptionPlansInsert {
   concurrent_conversation_limit?: number;
   voice_enabled?: boolean;
   daily_voice_turn_limit?: number;
+  trial_days?: number;
+  grace_days?: number;
 }
 
 export type SubscriptionPlansUpdate = Partial<SubscriptionPlansInsert>;
@@ -1315,8 +1567,8 @@ export interface SubscriptionsRow {
   id: string;
   parent_id: string;
   plan_id: string;
-  rail: 'stripe' | 'jazzcash' | 'easypaisa' | 'apple_iap' | 'google_play' | 'mock';
-  status: 'free' | 'trialing' | 'active' | 'past_due' | 'cancelled' | 'expired';
+  rail: 'card' | 'stripe' | 'jazzcash' | 'easypaisa' | 'carrier_billing' | 'apple_iap' | 'google_play' | 'mock';
+  status: 'free' | 'trialing' | 'active' | 'grace' | 'past_due' | 'cancelled' | 'expired';
   external_id: string | null;
   payment_method_token: string | null;
   payment_method_brand: 'visa' | 'mastercard' | 'amex' | 'unionpay' | 'wallet' | 'other' | null;
@@ -1330,14 +1582,18 @@ export interface SubscriptionsRow {
   trial_ends_at: string | null;
   created_at: string;
   updated_at: string;
+  grace_ends_at: string | null;
+  trial_consumed: boolean;
+  last_event_at: string | null;
+  last_event_id: string | null;
 }
 
 export interface SubscriptionsInsert {
   id?: string;
   parent_id: string;
   plan_id: string;
-  rail: 'stripe' | 'jazzcash' | 'easypaisa' | 'apple_iap' | 'google_play' | 'mock';
-  status?: 'free' | 'trialing' | 'active' | 'past_due' | 'cancelled' | 'expired';
+  rail: 'card' | 'stripe' | 'jazzcash' | 'easypaisa' | 'carrier_billing' | 'apple_iap' | 'google_play' | 'mock';
+  status?: 'free' | 'trialing' | 'active' | 'grace' | 'past_due' | 'cancelled' | 'expired';
   external_id?: string | null;
   payment_method_token?: string | null;
   payment_method_brand?: 'visa' | 'mastercard' | 'amex' | 'unionpay' | 'wallet' | 'other' | null;
@@ -1351,6 +1607,10 @@ export interface SubscriptionsInsert {
   trial_ends_at?: string | null;
   created_at?: string;
   updated_at?: string;
+  grace_ends_at?: string | null;
+  trial_consumed?: boolean;
+  last_event_at?: string | null;
+  last_event_id?: string | null;
 }
 
 export type SubscriptionsUpdate = Partial<SubscriptionsInsert>;
@@ -1389,9 +1649,9 @@ export type SupportedLanguagesUpdate = Partial<SupportedLanguagesInsert>;
 /** `public.transactions` */
 export interface TransactionsRow {
   id: string;
-  subscription_id: string;
+  subscription_id: string | null;
   parent_id: string;
-  rail: 'stripe' | 'jazzcash' | 'easypaisa' | 'apple_iap' | 'google_play' | 'mock';
+  rail: 'card' | 'stripe' | 'jazzcash' | 'easypaisa' | 'carrier_billing' | 'apple_iap' | 'google_play' | 'mock';
   external_id: string;
   kind: 'charge' | 'credit';
   status: 'failed' | 'reversed';
@@ -1403,13 +1663,14 @@ export interface TransactionsRow {
   occurred_at: string;
   created_at: string;
   updated_at: string;
+  payment_id: string | null;
 }
 
 export interface TransactionsInsert {
   id?: string;
-  subscription_id: string;
+  subscription_id?: string | null;
   parent_id: string;
-  rail: 'stripe' | 'jazzcash' | 'easypaisa' | 'apple_iap' | 'google_play' | 'mock';
+  rail: 'card' | 'stripe' | 'jazzcash' | 'easypaisa' | 'carrier_billing' | 'apple_iap' | 'google_play' | 'mock';
   external_id: string;
   kind: 'charge' | 'credit';
   status: 'failed' | 'reversed';
@@ -1421,6 +1682,7 @@ export interface TransactionsInsert {
   occurred_at: string;
   created_at?: string;
   updated_at?: string;
+  payment_id?: string | null;
 }
 
 export type TransactionsUpdate = Partial<TransactionsInsert>;
@@ -1519,12 +1781,18 @@ export interface Database {
       parents: { Row: ParentsRow; Insert: ParentsInsert; Update: ParentsUpdate };
       password_resets: { Row: PasswordResetsRow; Insert: PasswordResetsInsert; Update: PasswordResetsUpdate };
       payment_events: { Row: PaymentEventsRow; Insert: PaymentEventsInsert; Update: PaymentEventsUpdate };
+      payment_refunds: { Row: PaymentRefundsRow; Insert: PaymentRefundsInsert; Update: PaymentRefundsUpdate };
+      payments: { Row: PaymentsRow; Insert: PaymentsInsert; Update: PaymentsUpdate };
       practice_exercises: { Row: PracticeExercisesRow; Insert: PracticeExercisesInsert; Update: PracticeExercisesUpdate };
       practice_targets: { Row: PracticeTargetsRow; Insert: PracticeTargetsInsert; Update: PracticeTargetsUpdate };
       pronunciation_results: { Row: PronunciationResultsRow; Insert: PronunciationResultsInsert; Update: PronunciationResultsUpdate };
       safety_policies: { Row: SafetyPoliciesRow; Insert: SafetyPoliciesInsert; Update: SafetyPoliciesUpdate };
       sessions: { Row: SessionsRow; Insert: SessionsInsert; Update: SessionsUpdate };
       speech_practice: { Row: SpeechPracticeRow; Insert: SpeechPracticeInsert; Update: SpeechPracticeUpdate };
+      store_notifications: { Row: StoreNotificationsRow; Insert: StoreNotificationsInsert; Update: StoreNotificationsUpdate };
+      store_product_map: { Row: StoreProductMapRow; Insert: StoreProductMapInsert; Update: StoreProductMapUpdate };
+      store_purchases: { Row: StorePurchasesRow; Insert: StorePurchasesInsert; Update: StorePurchasesUpdate };
+      subscription_checkouts: { Row: SubscriptionCheckoutsRow; Insert: SubscriptionCheckoutsInsert; Update: SubscriptionCheckoutsUpdate };
       subscription_plans: { Row: SubscriptionPlansRow; Insert: SubscriptionPlansInsert; Update: SubscriptionPlansUpdate };
       subscriptions: { Row: SubscriptionsRow; Insert: SubscriptionsInsert; Update: SubscriptionsUpdate };
       supported_languages: { Row: SupportedLanguagesRow; Insert: SupportedLanguagesInsert; Update: SupportedLanguagesUpdate };

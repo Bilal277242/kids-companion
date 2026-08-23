@@ -27,6 +27,24 @@
     },
     {
       "path": "../../services/ai"
+    },
+    {
+      "path": "../../services/payments"
+    },
+    {
+      "path": "../../services/analytics"
+    },
+    {
+      "path": "../../services/learning"
+    },
+    {
+      "path": "../../services/practice"
+    },
+    {
+      "path": "../../services/safety"
+    },
+    {
+      "path": "../../services/voice"
     }
   ]
 }

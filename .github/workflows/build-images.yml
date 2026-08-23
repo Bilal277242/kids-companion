@@ -1,0 +1,107 @@
+# Builds and publishes the two runtime images. Called by the deployment
+# workflows; never runs on its own.
+#
+# ═══════════════════════════════════════════════════════════════════════════
+# BUILT ONCE, PROMOTED AFTERWARDS
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Images are tagged with the commit SHA and pushed to the registry ONCE. Staging
+# and production then deploy that exact digest rather than rebuilding from the
+# same source — a rebuild is a different artifact than the one that was tested,
+# however identical the inputs look. Base images move, mirrors resolve
+# differently, and "it built again" is not evidence.
+#
+# Neither image takes a build argument, so neither is environment-specific. The
+# dashboard reads `API_BASE_URL` on the server at run time rather than inlining a
+# `NEXT_PUBLIC_*` value at build time, which is what makes promotion possible at
+# all. See DEPLOYMENT.md §8.
+
+name: Build images
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: The commit to build.
+        required: true
+        type: string
+    outputs:
+      api-image:
+        description: Fully-qualified API image reference, by digest.
+        value: ${{ jobs.build.outputs.api-image }}
+      web-image:
+        description: Fully-qualified web image reference, by digest.
+        value: ${{ jobs.build.outputs.web-image }}
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    name: Build and push
+    runs-on: ubuntu-latest
+
+    outputs:
+      api-image: ${{ steps.api.outputs.reference }}
+      web-image: ${{ steps.web.outputs.reference }}
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      # GITHUB_TOKEN, not a personal credential: it is scoped to this repository,
+      # expires with the job, and never appears in a log.
+      - name: Sign in to the registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push the API image
+        id: api-build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infra/docker/api.Dockerfile
+          push: true
+          tags: ghcr.io/${{ github.repository }}/api:${{ inputs.ref }}
+          cache-from: type=gha,scope=api
+          cache-to: type=gha,scope=api,mode=max
+
+      - name: Build and push the web image
+        id: web-build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infra/docker/web.Dockerfile
+          push: true
+          tags: ghcr.io/${{ github.repository }}/web:${{ inputs.ref }}
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,scope=web,mode=max
+
+      # By digest, not by tag. A tag can be moved to point at something else;
+      # a digest is the artifact. What staging verified is then provably what
+      # production runs.
+      - name: Resolve the API digest
+        id: api
+        run: |
+          echo "reference=ghcr.io/${{ github.repository }}/api@${{ steps.api-build.outputs.digest }}" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve the web digest
+        id: web
+        run: |
+          echo "reference=ghcr.io/${{ github.repository }}/web@${{ steps.web-build.outputs.digest }}" >> "$GITHUB_OUTPUT"
+
+      - name: Summary
+        run: |
+          {
+            echo "### Images built"
+            echo
+            echo "- API: \`ghcr.io/${{ github.repository }}/api@${{ steps.api-build.outputs.digest }}\`"
+            echo "- Web: \`ghcr.io/${{ github.repository }}/web@${{ steps.web-build.outputs.digest }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

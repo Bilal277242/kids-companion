@@ -1,7 +1,10 @@
 import type { Config } from '@kids/config';
+import type { Database } from '@kids/db';
 import { healthResponseSchema, readyResponseSchema } from '@kids/validation';
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+
+import { probeDatabase, probeRedis, type ProbeResult } from '../probes.js';
 
 /**
  * Liveness, readiness, and version. See docs/API_CONVENTIONS.md §10.
@@ -10,7 +13,7 @@ import { z } from 'zod';
  * a field the schema does not name cannot be emitted.
  */
 export const healthRoutes =
-  (config: Config): FastifyPluginAsyncZod =>
+  (config: Config, dependencies: { readonly db?: Database } = {}): FastifyPluginAsyncZod =>
   async (app) => {
     /**
      * Liveness. Deliberately touches no dependency.
@@ -44,15 +47,38 @@ export const healthRoutes =
         },
         config: { rateLimit: false },
       },
-      async (_request, reply) => {
-        // Phase 1 adds real Postgres and Redis probes here. They are reported as
-        // `skipped` rather than `ok` so readiness never claims a check it did not run.
-        const checks: Record<string, 'ok' | 'unavailable' | 'skipped'> = {
-          database: 'skipped',
-          redis: 'skipped',
-        };
+      async (request, reply) => {
+        /* Probed in parallel and each on its own deadline.
+         *
+         * Sequentially, a database timeout would delay the Redis answer and the
+         * endpoint's own latency would become the sum of every dependency's
+         * worst case — which is how a readiness endpoint ends up being the thing
+         * that takes the load balancer down. */
+        const [database, redis] = await Promise.all([
+          dependencies.db === undefined
+            ? Promise.resolve<ProbeResult>('skipped')
+            : probeDatabase(dependencies.db, config.READINESS_PROBE_TIMEOUT_MS),
+          probeRedis({
+            url: config.REDIS_URL,
+            tlsEnabled: config.REDIS_TLS_ENABLED,
+            timeoutMs: config.READINESS_PROBE_TIMEOUT_MS,
+          }),
+        ]);
 
-        const degraded = Object.values(checks).some((v) => v === 'unavailable');
+        const checks: Record<string, ProbeResult> = { database, redis };
+
+        /* Only `unavailable` withdraws this instance from the pool.
+         *
+         * `skipped` must not: Redis is not wired into the request path yet, and
+         * an unconfigured dependency taking the whole fleet out of rotation
+         * would be a self-inflicted outage. What `skipped` buys is that nothing
+         * here ever claims a check it did not run. */
+        const degraded = Object.values(checks).some((value) => value === 'unavailable');
+
+        if (degraded) {
+          request.log.warn({ checks }, 'readiness degraded');
+        }
+
         return await reply
           .status(degraded ? 503 : 200)
           .send({ status: degraded ? ('degraded' as const) : ('ready' as const), checks });

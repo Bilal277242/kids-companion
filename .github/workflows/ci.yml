@@ -1,3 +1,23 @@
+# Pull-request checks.
+#
+# ═══════════════════════════════════════════════════════════════════════════
+# JOB NAMES ARE A PUBLIC INTERFACE
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Branch protection references these by name. Renaming a job silently removes it
+# from the required set — the rule keeps waiting for a check that no longer
+# reports, or stops blocking entirely. The exact names are listed in CI_CD.md §3
+# and must be changed in both places at once.
+#
+# ═══════════════════════════════════════════════════════════════════════════
+# SECRETS
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# This workflow uses NONE. It runs on `pull_request`, which for a fork receives
+# a read-only token and no repository secrets at all — deliberately, because a
+# pull request runs code the author controls. Anything needing a credential is a
+# deployment workflow, not a check.
+
 name: CI
 
 on:
@@ -17,21 +37,117 @@ env:
   NODE_ENV: test
 
 jobs:
-  # Cheap checks first, so a formatting mistake fails in seconds rather than
-  # after a container spin-up. See docs/TESTING_STANDARDS.md §9.
+  # ---------------------------------------------------------------------------
+  # Everything that needs neither a database nor a container. Fails in ~2
+  # minutes, so a formatting slip does not wait behind a test suite.
+  # ---------------------------------------------------------------------------
   verify:
     name: Verify
     runs-on: ubuntu-latest
 
-    # The integration suite runs PostgreSQL in-process (PGlite) and needs nothing
-    # here. This service exists for the e2e suite, which boots the real server
-    # process — and to run the migrations against the ACTUAL target major, since
-    # PGlite is a version ahead. See docs/DATA_MODEL.md §9.
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # Full history: the secret scan reads it, and the migration safeguards
+          # need the merge base to know which migrations are new.
+          fetch-depth: 0
+
+      - name: Scan for committed secrets
+        run: node infra/scripts/check-no-secrets.mjs
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Format
+        run: pnpm format:check
+
+      # Before the typecheck, because it explains the failure the typecheck
+      # would otherwise produce. A package that imports a workspace sibling it
+      # does not REFERENCE compiles wherever that sibling's dist already exists,
+      # and fails here with an unhelpful "cannot find module" — which is exactly
+      # what a clean runner hits every time.
+      - name: Project references match dependencies
+        run: pnpm verify:references
+
+      # Typecheck BEFORE lint, not after: `tsc -b` emits the workspace .d.ts
+      # files that ESLint's type-aware rules need to resolve cross-package types.
+      # Reversing these passes locally (where dist/ already exists) and fails on
+      # a clean checkout — which is the state CI is always in.
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Database types are current
+        run: pnpm db:types:check
+
+      # Immutability, ordering, and destructive-statement review for anything new
+      # in infra/migrations. See CI_CD.md §6.
+      - name: Migration safeguards
+        run: node infra/scripts/check-migrations.mjs --base origin/${{ github.base_ref || 'main' }}
+
+      - name: Deployment configuration
+        run: pnpm verify:deploy
+
+      # An explicit allowlist with review dates, rather than a lowered threshold.
+      # See infra/scripts/check-audit.mjs for why.
+      - name: Dependency audit
+        run: pnpm verify:audit
+
+      - name: Build
+        run: pnpm build
+
+  # ---------------------------------------------------------------------------
+  # Tests. Split from `verify` so a failing test and a failing lint are two
+  # separate red marks rather than one, and each points at its own cause.
+  # ---------------------------------------------------------------------------
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Unit tests
+        run: pnpm test:unit
+
+      # The integration suite runs PostgreSQL in-process (PGlite) and needs no
+      # service container. That is why this job has none.
+      - name: Integration tests
+        run: pnpm test:integration
+
+  # ---------------------------------------------------------------------------
+  # The checks that need a real PostgreSQL: applying migrations against the
+  # actual target major, and the e2e suite that boots a real server process.
+  # PGlite is a version ahead and in-process, so neither is covered above.
+  # ---------------------------------------------------------------------------
+  database:
+    name: Database
+    runs-on: ubuntu-latest
+
     services:
       postgres:
         image: postgres:17-alpine
         env:
           POSTGRES_USER: postgres
+          # Not a secret. A throwaway credential for a container that lives for
+          # the length of one job and is reachable only from it.
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: kids_companion_ci
         ports:
@@ -47,90 +163,107 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
-        with:
-          fetch-depth: 0 # full history for the secret scan
-
-      - name: Scan for committed secrets
-        run: node infra/scripts/check-no-secrets.mjs
-
       - uses: pnpm/action-setup@v4
-
       - uses: actions/setup-node@v5
         with:
           node-version-file: .nvmrc
           cache: pnpm
 
-      - run: pnpm install --frozen-lockfile
+      - name: Install
+        run: pnpm install --frozen-lockfile
 
-      - name: Format
-        run: pnpm format:check
-
-      # Typecheck before lint, not after: `tsc -b` emits the workspace .d.ts
-      # files that ESLint's type-aware rules need to resolve cross-package types.
-      # Reversing these two passes locally (where dist/ already exists) and fails
-      # on a clean checkout.
-      - name: Typecheck
-        run: pnpm typecheck
-
-      - name: Lint
-        run: pnpm lint
-
-      # Fails if the schema changed without regenerating the types. Runs the
-      # migrations in-process (PGlite), so no database service is needed.
-      - name: Database types are current
-        run: pnpm db:types:check
-
-      - name: Unit tests
-        run: pnpm test:unit
-
-      - name: Integration tests
-        run: pnpm test:integration
-
-      - name: Build
-        run: pnpm build
-
-      # Applies the migrations to the real target major, which is the check the
-      # PGlite-based suites cannot make.
-      - name: Migrate
+      - name: Apply migrations
         run: pnpm db:migrate
+
+      # Applying twice must be a no-op. If the second run reports work, a
+      # migration is not idempotent and a retried deploy would corrupt state.
+      - name: Migrations are idempotent
+        run: |
+          output=$(pnpm db:status)
+          echo "$output"
+          if echo "$output" | grep -qE '^\s{2}\s' ; then
+            echo "::error::Migrations remain pending after a successful apply."
+            exit 1
+          fi
 
       - name: End-to-end tests
         run: pnpm test:e2e
 
-      - name: Dependency audit
-        run: pnpm audit --audit-level high
-
-  docker:
-    name: Docker image
-    needs: verify
+  # ---------------------------------------------------------------------------
+  # Images. Proves they build AND that what they produce actually starts —
+  # a build that yields a container which exits immediately is not a pass.
+  # ---------------------------------------------------------------------------
+  images:
+    name: Images
     runs-on: ubuntu-latest
+    needs: verify
+
     steps:
       - uses: actions/checkout@v5
 
       - name: Build the API image
         run: docker build -f infra/docker/api.Dockerfile -t kids-companion-api:ci .
 
-      # Proves the image boots and serves liveness — a build that produces an
-      # image which immediately exits is not a passing build.
-      - name: Smoke test the image
+      - name: Build the web image
+        run: docker build -f infra/docker/web.Dockerfile -t kids-companion-web:ci .
+
+      # ═══════════════════════════════════════════════════════════════════════
+      # THE SMOKE TEST NEEDS A DATABASE_URL, AND THAT IS THE POINT
+      # ═══════════════════════════════════════════════════════════════════════
+      #
+      # The API refuses to boot without one — configuration is validated before
+      # anything starts, so a broken environment fails the deploy rather than the
+      # first child's request. A smoke test that omitted it would watch the
+      # container exit 78 and call it a failing image.
+      #
+      # The URL deliberately points at nothing. That is the interesting case:
+      #
+      #   /health  must be 200 — liveness touches no dependency, so a dead
+      #            database must NOT make an orchestrator restart the container.
+      #   /ready   must be 503 — readiness does consult it, and has to say no.
+      #
+      # Together these prove the two probes are genuinely different, which is
+      # the property that keeps a slow database from becoming an outage.
+      - name: Smoke test the API image
         run: |
           docker run -d --name api-smoke -p 8080:8080 \
             -e APP_ENV=ci -e NODE_ENV=production -e LOG_LEVEL=fatal \
+            -e DATABASE_URL=postgresql://nobody:nobody@127.0.0.1:59999/none \
             kids-companion-api:ci
-          for i in $(seq 1 30); do
-            if curl -fsS http://127.0.0.1:8080/health; then exit 0; fi
+
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8080/health > /dev/null; then
+              echo "liveness is up after ${attempt} attempt(s)"
+              break
+            fi
+            if [ "$attempt" -eq 30 ]; then
+              echo "::error::The container never served /health."
+              docker logs api-smoke
+              exit 1
+            fi
             sleep 2
           done
-          echo "Container did not become healthy"
-          docker logs api-smoke
-          exit 1
 
-  # Browser tests need ~400 MB of binaries, so they run in their own job rather
-  # than slowing every check above.
-  e2e-web:
+          ready_status=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/ready)
+          if [ "$ready_status" != "503" ]; then
+            echo "::error::/ready returned ${ready_status} with no reachable database; expected 503."
+            docker logs api-smoke
+            exit 1
+          fi
+          echo "readiness correctly reported 503 with no database"
+
+      - name: Container logs
+        if: ${{ failure() }}
+        run: docker logs api-smoke || true
+
+  # ---------------------------------------------------------------------------
+  # Browser tests need ~400 MB of binaries, so they stay out of the critical path.
+  # ---------------------------------------------------------------------------
+  browser:
     name: Browser E2E
-    needs: verify
     runs-on: ubuntu-latest
+    needs: verify
+
     steps:
       - uses: actions/checkout@v5
       - uses: pnpm/action-setup@v4
@@ -139,7 +272,9 @@ jobs:
           node-version-file: .nvmrc
           cache: pnpm
 
-      - run: pnpm install --frozen-lockfile
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
       - run: pnpm exec playwright install --with-deps chromium
       - run: pnpm --filter @kids/web run build
       - run: pnpm test:e2e:web
@@ -151,5 +286,28 @@ jobs:
           path: playwright-report/
           retention-days: 7
 
-  # Phase 2 adds the safety corpus here. A regression fails the build.
-  # See docs/TESTING_STANDARDS.md §5.3.
+  # ---------------------------------------------------------------------------
+  # One check for branch protection to require, so adding a job above does not
+  # mean editing a repository setting to match.
+  # ---------------------------------------------------------------------------
+  required:
+    name: Required checks
+    runs-on: ubuntu-latest
+    if: ${{ always() }}
+    needs: [verify, test, database, images]
+
+    steps:
+      # `needs.*.result` is 'success', 'failure', 'cancelled' or 'skipped'.
+      # Without this, a skipped or cancelled dependency leaves this job green
+      # and branch protection lets the merge through.
+      - name: Confirm every required job succeeded
+        run: |
+          results='${{ join(needs.*.result, " ") }}'
+          echo "upstream results: ${results}"
+          for result in ${results}; do
+            if [ "${result}" != "success" ]; then
+              echo "::error::A required check did not succeed (${results})."
+              exit 1
+            fi
+          done
+          echo "all required checks succeeded"

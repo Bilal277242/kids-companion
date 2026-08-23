@@ -853,7 +853,33 @@ export const conversationRoutes =
 
         /* --- Persist both messages --- */
         const persisted = await app.withParent(request, async (tx) => {
-          const nextSequence = loaded.conversation.message_count;
+          /**
+           * ═══════════════════════════════════════════════════════════════
+           * THE SEQUENCE IS ALLOCATED HERE, NOT BEFORE THE MODEL CALL.
+           * ═══════════════════════════════════════════════════════════════
+           *
+           * `loaded.conversation.message_count` was read BEFORE the provider
+           * was called, and that call takes hundreds of milliseconds. Two
+           * turns in flight on the same conversation therefore both computed
+           * the same `nextSequence`, and the second insert died on
+           * `uq_messages_conversation_sequence` — a 500, which then told the
+           * client to retry the thing that just failed.
+           *
+           * That is not exotic: a child taps send twice, or the app retries
+           * on a flaky mobile connection while the first turn is still in
+           * flight — which ARCHITECTURE.md §7.3 explicitly expects it to do.
+           *
+           * `for update` locks the conversation row, so a concurrent turn
+           * waits for this one to commit and then reads the count it actually
+           * produced. The unique index was doing its job; it was the only
+           * thing standing between a stale read and a corrupted transcript
+           * order.
+           */
+          const { rows: counterRows } = await tx.query<{ message_count: number }>(
+            'select message_count from conversations where id = $1 for update',
+            [conversationId],
+          );
+          const nextSequence = counterRows[0]?.message_count ?? loaded.conversation.message_count;
 
           const { rows: childRows } = await tx.query<{ id: string }>(
             `insert into messages

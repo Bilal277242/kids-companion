@@ -25,13 +25,26 @@ const PATTERNS = [
   { name: 'Slack token', re: /\bxox[abprs]-[0-9A-Za-z-]{10,}\b/ },
   { name: 'GitHub token', re: /\bgh[pousr]_[0-9A-Za-z]{36,}\b/ },
   { name: 'JWT', re: /\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\./ },
+  /*
+   * `(?!\$\{)` — the password position must not be an interpolation.
+   *
+   * `postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/app` is not
+   * a credential; it is the SHAPE of one, with the value supplied at run time
+   * from the secret manager. Compose files and deployment workflows are full of
+   * these by design, and flagging them trains people to skip the hook — which
+   * costs far more than the pattern buys.
+   *
+   * Deliberately narrow: only the password position, only an interpolation. A
+   * literal password on the same line is still caught, and every vendor
+   * signature above is untouched.
+   */
   {
     name: 'Postgres URL with password',
-    re: /postgres(?:ql)?:\/\/[^:\s]+:[^@\s]{6,}@(?!localhost|127\.0\.0\.1)/,
+    re: /postgres(?:ql)?:\/\/[^:\s]+:(?!\$\{)[^@\s]{6,}@(?!localhost|127\.0\.0\.1)/,
   },
   {
     name: 'Redis URL with password',
-    re: /redis(?:s)?:\/\/[^:\s]*:[^@\s]{6,}@(?!localhost|127\.0\.0\.1)/,
+    re: /redis(?:s)?:\/\/[^:\s]*:(?!\$\{)[^@\s]{6,}@(?!localhost|127\.0\.0\.1)/,
   },
   {
     name: 'Assigned secret-shaped literal',
