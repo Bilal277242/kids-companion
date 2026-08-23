@@ -196,17 +196,17 @@ unproven against a real vendor.
 
 ## Infrastructure
 
-| Item                   | Status           | Evidence level                                                                                                                                                |
-| ---------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Production environment | **FAIL**         | does not exist. No host, no domain, no certificate, no orchestrator — **external config**                                                                     |
-| Database               | **NOT VERIFIED** | implemented, tested. Migrations forward-only with a checksum ledger, applied to real PostgreSQL 17 in CI. No production instance exists — **external config** |
-| Backups                | **FAIL**         | nothing. No schedule, no retention policy, no restore ever performed — **external config**                                                                    |
-| Monitoring             | **FAIL**         | metrics implemented and tested; **no external system receives them**. `OTEL_EXPORTER_OTLP_ENDPOINT` is declared and unread                                    |
-| Logging                | **PASS**         | implemented, tested. Redaction at 100% of lines and branches, request ids, no internals in responses                                                          |
-| Alerts                 | **FAIL**         | five conditions implemented and tested to fire and clear — **into a log file**. No pager, no webhook configured anywhere. Includes the safety-escalation path |
-| Rollback               | **NOT VERIFIED** | documented and correct about the forward-only database. **Never rehearsed**, and its backup fallback does not exist                                           |
+| Item                   | Status           | Evidence level                                                                                                                                                                                                      |
+| ---------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Production environment | **FAIL**         | does not exist. No host, no domain, no certificate, no orchestrator — **external config**                                                                                                                           |
+| Database               | **NOT VERIFIED** | implemented, tested. Migrations forward-only with a checksum ledger, applied to real PostgreSQL 17 in CI. No production instance exists — **external config**                                                       |
+| Backups                | **FAIL**         | nothing. No schedule, no retention policy, no restore ever performed — **external config**                                                                                                                          |
+| Monitoring             | **FAIL**         | metrics implemented and tested; **no external system receives them**. `OTEL_EXPORTER_OTLP_ENDPOINT` is declared and unread                                                                                          |
+| Logging                | **PASS**         | implemented, tested. Redaction at 100% of lines and branches, request ids, no internals in responses                                                                                                                |
+| Alerts                 | **FAIL**         | five conditions implemented and tested to fire and clear — **into a log file**. No pager, no webhook configured anywhere. **Safety escalations no longer depend on this**: they have their own delivery path (I-01) |
+| Rollback               | **NOT VERIFIED** | documented and correct about the forward-only database. **Never rehearsed**, and its backup fallback does not exist                                                                                                 |
 
-### I-01 · Alerts, including child-safety escalation, reach nobody
+### I-01 · Alerts reach nobody · _escalation half resolved_
 
 The alert monitor is correct and tested: it fires on the first safety failure,
 does not repeat while firing, clears on recovery, and survives a webhook outage.
@@ -263,9 +263,11 @@ configuration are not.
 
 ## Blocking items, in the order they should be fixed
 
-1. **Escalation delivery** (I-01). A children's product where a disclosure of
-   harm reaches no human should not launch. Everything else on this list is
-   recoverable; this one is not, because the cost lands on a child.
+1. **The disclosure protocol** (Q-07). Delivery is now built — an escalation is
+   recorded, routed and retried. What does not exist is the decision about WHO
+   receives it and what duty attaches, which §6.2 of docs/CHILD_SAFETY.md is
+   explicit cannot be made by engineers. A configured endpoint with nobody
+   trained behind it is not a human path.
 2. **Learning events** (P-01). The parent dashboard is a core promise and it
    shows zeros.
 3. **Backups**, configured _and_ a restore performed.

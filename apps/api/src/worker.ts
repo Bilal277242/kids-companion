@@ -76,6 +76,25 @@ const main = async (): Promise<void> => {
 
   const jobs: Job[] = [
     {
+      /**
+       * ═══════════════════════════════════════════════════════════════════
+       * FIRST IN THE LIST, AND ON THE SHORTEST INTERVAL.
+       * ═══════════════════════════════════════════════════════════════════
+       *
+       * Every other sweep repairs a number that is stale. This one repairs a
+       * child who disclosed something and whose escalation has not yet reached
+       * a human, because the endpoint was unreachable when the turn happened.
+       *
+       * A minute is short for a backstop and long for this; it is a compromise
+       * with not hammering an endpoint that is already failing. The delivery
+       * attempt on the request path is the primary route — this only catches
+       * what that could not do.
+       */
+      name: 'safety.retryEscalationDelivery',
+      intervalMs: config.WORKER_ESCALATION_RETRY_INTERVAL_MS,
+      run: async () => await app.maintenance.retryEscalationDelivery(),
+    },
+    {
       name: 'subscriptions.sweepExpired',
       intervalMs: config.WORKER_SUBSCRIPTION_SWEEP_INTERVAL_MS,
       run: async () => ({ expired: await app.maintenance.sweepExpiredSubscriptions() }),

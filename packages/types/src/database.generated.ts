@@ -1258,6 +1258,43 @@ export interface PronunciationResultsInsert {
 
 export type PronunciationResultsUpdate = Partial<PronunciationResultsInsert>;
 
+/** `public.safety_escalations` */
+export interface SafetyEscalationsRow {
+  id: string;
+  child_id: string;
+  conversation_id: string | null;
+  reason: 'signal_category' | 'evasion_of_safety' | 'repeated_attempts' | 'unspecified';
+  categories: string[];
+  severity: 'low' | 'medium' | 'high' | 'critical';
+  occurred_at: string;
+  delivery_status: 'pending' | 'delivered' | 'abandoned';
+  attempts: number;
+  last_attempt_at: string | null;
+  last_error: string | null;
+  delivered_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SafetyEscalationsInsert {
+  id?: string;
+  child_id: string;
+  conversation_id?: string | null;
+  reason: 'signal_category' | 'evasion_of_safety' | 'repeated_attempts' | 'unspecified';
+  categories?: string[];
+  severity?: 'low' | 'medium' | 'high' | 'critical';
+  occurred_at?: string;
+  delivery_status?: 'pending' | 'delivered' | 'abandoned';
+  attempts?: number;
+  last_attempt_at?: string | null;
+  last_error?: string | null;
+  delivered_at?: string | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export type SafetyEscalationsUpdate = Partial<SafetyEscalationsInsert>;
+
 /** `public.safety_policies` */
 export interface SafetyPoliciesRow {
   id: string;
@@ -1786,6 +1823,7 @@ export interface Database {
       practice_exercises: { Row: PracticeExercisesRow; Insert: PracticeExercisesInsert; Update: PracticeExercisesUpdate };
       practice_targets: { Row: PracticeTargetsRow; Insert: PracticeTargetsInsert; Update: PracticeTargetsUpdate };
       pronunciation_results: { Row: PronunciationResultsRow; Insert: PronunciationResultsInsert; Update: PronunciationResultsUpdate };
+      safety_escalations: { Row: SafetyEscalationsRow; Insert: SafetyEscalationsInsert; Update: SafetyEscalationsUpdate };
       safety_policies: { Row: SafetyPoliciesRow; Insert: SafetyPoliciesInsert; Update: SafetyPoliciesUpdate };
       sessions: { Row: SessionsRow; Insert: SessionsInsert; Update: SessionsUpdate };
       speech_practice: { Row: SpeechPracticeRow; Insert: SpeechPracticeInsert; Update: SpeechPracticeUpdate };

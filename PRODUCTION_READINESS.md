@@ -18,10 +18,11 @@ because the first reading was wrong.
 This is not a close call, and the reason is not the count. One finding is a
 child-safety gap rather than an infrastructure one:
 
-> **A child disclosing harm currently reaches no human.**
-> `SAFETY_ESCALATION_WEBHOOK_URL` is _required_ for production to boot, and
-> nothing in the codebase reads it. An escalation writes an audit row and a
-> `warn` log line, and that is the whole of it. See F-01.
+> **~~A child disclosing harm currently reaches no human.~~ RESOLVED**
+> `SAFETY_ESCALATION_WEBHOOK_URL` is now read: an escalation is written to a
+> durable delivery ledger and routed to the configured endpoint, retried by
+> the worker until it lands. **Who that endpoint belongs to remains Q-07 and
+> still blocks launch** — the mechanism exists, the protocol does not. See F-01.
 
 Nothing here should be read as "close, pending sign-off". Three of the failures
 (storage, rate limiting, error tracking) are missing implementations, not
@@ -59,17 +60,17 @@ yet.
 **Nine configuration keys are declared, validated, documented — and never read
 by any code.** Several are the _only_ mechanism their category has.
 
-| Key                             | Category it belongs to | Consequence                                           |
-| ------------------------------- | ---------------------- | ----------------------------------------------------- |
-| `SAFETY_ESCALATION_WEBHOOK_URL` | child safety           | **F-01** — disclosures reach nobody                   |
-| `AI_DAILY_COST_CEILING_USD`     | AI limits              | No account-wide spend ceiling                         |
-| `SENTRY_DSN`                    | error tracking         | No error tracking                                     |
-| `STORAGE_PROVIDER`              | storage                | No object store                                       |
-| `OTEL_EXPORTER_OTLP_ENDPOINT`   | monitoring             | No tracing                                            |
-| `ENCRYPTION_ACTIVE_KEY_ID`      | database               | Key id is hard-coded `'placeholder'`                  |
-| `RETENTION_TRANSCRIPT_DAYS`     | privacy                | Transcripts are never deleted                         |
-| `SAFETY_REVIEW_QUEUE_ENABLED`   | child safety           | No review queue                                       |
-| `REDIS_URL`                     | rate limits            | Readiness probe only; the limiter never touches Redis |
+| Key                                 | Category it belongs to | Consequence                                           |
+| ----------------------------------- | ---------------------- | ----------------------------------------------------- |
+| ~~`SAFETY_ESCALATION_WEBHOOK_URL`~~ | child safety           | **RESOLVED** — read, routed, retried (F-01)           |
+| `AI_DAILY_COST_CEILING_USD`         | AI limits              | No account-wide spend ceiling                         |
+| `SENTRY_DSN`                        | error tracking         | No error tracking                                     |
+| `STORAGE_PROVIDER`                  | storage                | No object store                                       |
+| `OTEL_EXPORTER_OTLP_ENDPOINT`       | monitoring             | No tracing                                            |
+| `ENCRYPTION_ACTIVE_KEY_ID`          | database               | Key id is hard-coded `'placeholder'`                  |
+| `RETENTION_TRANSCRIPT_DAYS`         | privacy                | Transcripts are never deleted                         |
+| `SAFETY_REVIEW_QUEUE_ENABLED`       | child safety           | No review queue                                       |
+| `REDIS_URL`                         | rate limits            | Readiness probe only; the limiter never touches Redis |
 
 This is why a configuration review alone would have passed this application.
 Every one of these has a sensible default, a validation rule, and a paragraph in
@@ -84,7 +85,17 @@ no effect actively misleads whoever configures the environment.
 
 ## Findings
 
-### F-01 · Safety escalations reach no human · **CRITICAL — blocks launch**
+### F-01 · Safety escalations reach no human · **RESOLVED**
+
+> **Fixed after this review.** Escalations are now recorded in
+> `safety_escalations` and routed to `SAFETY_ESCALATION_WEBHOOK_URL`, with a
+> worker sweep retrying anything undelivered and a failed delivery raising the
+> safety alert. The payload carries no conversation content. **Q-07 — who is
+> notified, and what duty attaches — is untouched and still blocks launch.**
+>
+> The original finding is kept below as written.
+
+#### As originally found
 
 **Category:** monitoring, child safety.
 

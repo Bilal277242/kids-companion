@@ -23,6 +23,7 @@ import { z } from 'zod';
 import { auditOrFail, type AuditLogger } from '../audit.js';
 import { CHILD_FACING_MESSAGE, checkParentalGate } from '../parental-gate.js';
 import { requireChildOwnership } from '../plugins/auth.js';
+import type { EscalationDelivery, EscalationReasonCode } from '../safety-escalation.js';
 
 /**
  * The conversation API.
@@ -64,7 +65,28 @@ export interface ConversationRoutesOptions {
   readonly messageRateLimitPerMinute: number;
   readonly startRateLimitPerHour: number;
   readonly clock: Clock;
+  /**
+   * Routes an escalation to a human. See apps/api/src/safety-escalation.ts.
+   *
+   * Optional so a test harness that does not care about routing does not have
+   * to supply one — but its absence is logged where the escalation is raised,
+   * because an escalation nobody is told about is the failure this exists to
+   * prevent.
+   */
+  readonly escalations?: EscalationDelivery;
 }
+
+/**
+ * Narrows the pipeline's optional reason to what the ledger accepts.
+ *
+ * The upstream type already matches; this exists for the case where it is
+ * ABSENT. An escalation whose rule cannot be named still has to reach a human,
+ * so it is recorded as `unspecified` rather than dropped or, worse, guessed at.
+ */
+const escalationReasonCode = (reason: string | undefined): EscalationReasonCode =>
+  reason === 'signal_category' || reason === 'evasion_of_safety' || reason === 'repeated_attempts'
+    ? reason
+    : 'unspecified';
 
 /**
  * PLACEHOLDER CODEC — NOT ENCRYPTION.
@@ -1005,9 +1027,13 @@ export const conversationRoutes =
         });
 
         if (turn.escalation) {
-          // An escalation is not merely a block. It routes to the human protocol
-          // in docs/CHILD_SAFETY.md §6 — which is unresolved (Q-07), so for now
-          // it is recorded at the highest fidelity available and flagged loudly.
+          /* An escalation is not merely a block. docs/CHILD_SAFETY.md §6.1
+           * item 5 requires it to be RECORDED and ROUTED to a human path.
+           *
+           * The audit entry below is the record. `options.escalations` is the
+           * routing: it writes a durable delivery row and then attempts the
+           * webhook without the child's turn waiting on it. WHO reads that
+           * endpoint is Q-07 and is not decided here. */
           await auditOrFail(
             audit,
             {
@@ -1030,6 +1056,25 @@ export const conversationRoutes =
             { requestId: request.requestId, conversationId },
             'safety escalation raised — human review required',
           );
+
+          if (options.escalations === undefined) {
+            /* Never silent. §6.1 item 1: a disclosure must never be swallowed,
+             * and "nobody was told" is a form of swallowing it. */
+            request.log.error(
+              { requestId: request.requestId, control: 'safety_escalation_delivery' },
+              'safety escalation NOT routed: no delivery configured',
+            );
+          } else {
+            await options.escalations.record({
+              childId: loaded.conversation.child_id,
+              conversationId,
+              reason: escalationReasonCode(turn.escalationReason),
+              // Deduplicated: several layers commonly flag the same category,
+              // and a reviewer wants the set, not the tally.
+              categories: [...new Set(turn.safetyRecords.flatMap((r) => r.categories))],
+              severity: 'critical',
+            });
+          }
         }
 
         // Structured, and content-free. `turn.status` and the layer names are

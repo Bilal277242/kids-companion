@@ -144,6 +144,16 @@ const dataSchema = z.object({
   WORKER_STORE_SYNC_INTERVAL_MS: intFromEnv({ min: 10_000 }).default(3_600_000),
   /** The retention backstop. Deletes child audio whose retention has elapsed. */
   WORKER_AUDIO_SWEEP_INTERVAL_MS: intFromEnv({ min: 10_000 }).default(900_000),
+
+  /**
+   * Retry interval for safety escalations that could not be routed.
+   *
+   * Much shorter than the other sweeps, and deliberately so: the others repair
+   * a stale number, this one repairs a child whose disclosure has not yet
+   * reached a human. Floored at 10 s to stop a misconfiguration turning into a
+   * hot loop against an endpoint that is already failing.
+   */
+  WORKER_ESCALATION_RETRY_INTERVAL_MS: intFromEnv({ min: 10_000 }).default(60_000),
 });
 
 const authSchema = z.object({

@@ -82,6 +82,7 @@ import { practiceRoutes } from './routes/practice.js';
 import { storeBillingRoutes } from './routes/store-billing.js';
 import { subscriptionRoutes } from './routes/subscriptions.js';
 import { voiceRoutes } from './routes/voice.js';
+import { createEscalationDelivery } from './safety-escalation.js';
 import { createAttemptCounter, createPolicyStore } from './safety-store.js';
 import { createStoreBilling } from './store-billing.js';
 import { createSubscriptionReconciler } from './subscription-reconciler.js';
@@ -400,6 +401,24 @@ export const buildApp = async (options: BuildAppOptions) => {
   // this service is under /v1, so this prefix carries no version — a real
   // inconsistency, recorded in docs/API_CONVENTIONS.md §1.1 rather than quietly
   // resolved in one direction here.
+  /**
+   * Routing for safety escalations.
+   *
+   * Built here so it can reach the alert monitor: an escalation that cannot be
+   * delivered is a failure of the safety pipeline, and `reportSafetyFailure`
+   * is the one alert condition that fires on the FIRST occurrence rather than
+   * on a rate. See docs/CHILD_SAFETY.md §6.1 item 5.
+   */
+  const escalations = createEscalationDelivery({
+    db,
+    clock,
+    logger: app.log,
+    webhookUrl: config.SAFETY_ESCALATION_WEBHOOK_URL,
+    onDeliveryFailure: (detail) => {
+      alertMonitor.reportSafetyFailure(detail);
+    },
+  });
+
   await app.register(
     conversationRoutes({
       engine,
@@ -411,6 +430,7 @@ export const buildApp = async (options: BuildAppOptions) => {
       messageRateLimitPerMinute: config.RATE_LIMIT_CONVERSATION_PER_MINUTE,
       startRateLimitPerHour: config.RATE_LIMIT_CONVERSATION_START_PER_HOUR,
       clock,
+      escalations,
     }),
     { prefix: '/api' },
   );
@@ -691,6 +711,14 @@ export const buildApp = async (options: BuildAppOptions) => {
     sweepExpiredSubscriptions: async (): Promise<number> =>
       await subscriptionReconciler.sweepExpired(),
 
+    /**
+     * Retries escalations no human has been told about yet.
+     *
+     * Listed FIRST because it is the only sweep whose backlog is a child
+     * waiting rather than a number being stale.
+     */
+    retryEscalationDelivery: async () => await escalations.retryPending(),
+
     /** Asks each rail about payments we never heard the outcome of. */
     reconcilePayments: async () => await paymentStore.reconcile(),
 
@@ -715,6 +743,7 @@ export const buildApp = async (options: BuildAppOptions) => {
 declare module 'fastify' {
   interface FastifyInstance {
     readonly maintenance: {
+      retryEscalationDelivery(): Promise<{ attempted: number; delivered: number }>;
       sweepExpiredSubscriptions(): Promise<number>;
       reconcilePayments(): Promise<{ checked: number; resolved: number; stillUnresolved: number }>;
       synchroniseStorePurchases(): Promise<{ checked: number; changed: number }>;
