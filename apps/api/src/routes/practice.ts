@@ -24,6 +24,7 @@ import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 
 import { auditOrFail, type AuditLogger } from '../audit.js';
+import type { LearningRecorder } from '../learning-events.js';
 import { checkParentalGate } from '../parental-gate.js';
 import { requireChildOwnership } from '../plugins/auth.js';
 
@@ -59,6 +60,8 @@ export interface PracticeRoutesOptions {
   readonly limits: AudioLimits;
   readonly analysisTimeoutMs: number;
   readonly rateLimitPerMinute: number;
+  /** Records pronunciation scores for the progress dashboard. */
+  readonly learning?: LearningRecorder;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -589,6 +592,18 @@ export const practiceRoutes =
 
           return rows[0]?.id ?? null;
         });
+
+        /* Averaged rather than summed, so a child who practises more does not
+         * appear to pronounce better. Keyed on the attempt id, so a retry does
+         * not shift the average twice. */
+        if (attemptId !== null) {
+          await options.learning?.pronunciationScored({
+            childId: loaded.session.child_id,
+            speechPracticeId: loaded.session.id,
+            attemptRef: attemptId,
+            score: score.overall,
+          });
+        }
 
         /* --- PROGRESS AND ACHIEVEMENTS --- */
         const awarded = await asSystem(db, async (tx) => {

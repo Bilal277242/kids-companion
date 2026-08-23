@@ -100,6 +100,19 @@ const main = async (): Promise<void> => {
       run: async () => ({ expired: await app.maintenance.sweepExpiredSubscriptions() }),
     },
     {
+      /**
+       * The backstop for progress numbers.
+       *
+       * Rollups are rebuilt when a conversation is explicitly ended, and a
+       * five-year-old does not end conversations — the app gets closed, the
+       * tablet gets taken away. Without this the turns are recorded correctly
+       * and the parent still sees zero.
+       */
+      name: 'learning.rebuildRollups',
+      intervalMs: config.WORKER_LEARNING_ROLLUP_INTERVAL_MS,
+      run: async () => await app.maintenance.rebuildLearningRollups(),
+    },
+    {
       name: 'payments.reconcile',
       intervalMs: config.WORKER_PAYMENT_RECONCILE_INTERVAL_MS,
       run: async () => await app.maintenance.reconcilePayments(),

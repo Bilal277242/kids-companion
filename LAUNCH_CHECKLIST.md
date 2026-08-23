@@ -13,9 +13,9 @@ executed. Nothing is marked PASS for existing.
 
 |                  | Count |
 | ---------------- | ----: |
-| **PASS**         |    18 |
-| **FAIL**         |    10 |
-| **NOT VERIFIED** |    18 |
+| **PASS**         |    20 |
+| **FAIL**         |     9 |
+| **NOT VERIFIED** |    17 |
 
 **Not one item in Infrastructure or Mobile passes.** No container has been
 built, no environment has ever run, no build has been produced for either
@@ -25,9 +25,10 @@ being verified.
 Two product features are also weaker than they appear, and both were found
 during this assessment rather than earlier:
 
-> **The parent dashboard's activity numbers will always be zero.** The pipeline
+> ~~**The parent dashboard's activity numbers will always be zero.** The pipeline
 > is complete — event → rollup → dashboard — except that nothing ever emits the
-> event. See P-01.
+> event. See P-01.~~ **RESOLVED** — the recorder is wired and proven end to end.
+> See P-01.
 >
 > **"Stories" is a conversation screen with different placeholder text.** No
 > story is tracked, and the plan's weekly story limit is enforced nowhere.
@@ -86,10 +87,10 @@ real Postgres beyond CI's service container.
 | Speech practice  | **NOT VERIFIED** | implemented, tested. Scoring is real; the analysis provider is a mock                                       |
 | Stories          | **FAIL**         | implemented in name only — see **P-02**                                                                     |
 | Characters       | **PASS**         | implemented, tested. Four seeded, each with traits, colour and a face for pre-readers                       |
-| Progress         | **FAIL**         | implemented, tested in isolation, **never wired** — see **P-01**                                            |
-| Parent dashboard | **NOT VERIFIED** | implemented, tested. Renders correctly; its activity numbers are always zero (P-01)                         |
+| Progress         | **PASS**         | implemented, tested, **verified end to end** — talking to the companion moves the numbers (P-01 resolved)   |
+| Parent dashboard | **PASS**         | implemented, tested, verified. Activity numbers are produced by real use, not seeded (P-01 resolved)        |
 
-### P-01 · Nothing ever records a learning event · **blocking**
+### P-01 · Nothing ever records a learning event · ~~**blocking**~~ **RESOLVED**
 
 The progress pipeline is built correctly end to end:
 
@@ -119,6 +120,48 @@ did notice the conversations. That reads as broken, and it is.
 `conversations` directly and asserts structure and empty states. Nothing asserts
 that _using the product_ produces a number. The aggregation logic itself is
 well tested — in `services/learning`, in isolation, against events handed to it.
+
+#### Resolution
+
+`apps/api/src/learning-events.ts` — a recorder wired into the conversation and
+practice routes. No part of the pipeline changed; the missing producer was
+added.
+
+| What emits              | Where                                                     | Events                                                                              |
+| ----------------------- | --------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| A child's turn          | `routes/conversations.ts`, after the message is persisted | `conversation_turn`, `word_encountered` (a **count**)                               |
+| A conversation ending   | `routes/conversations.ts` end route                       | `conversation_ended`, `conversation_time` (seconds from `app.conversation_seconds`) |
+| A pronunciation attempt | `routes/practice.ts`, after the result is stored          | `pronunciation_scored` (averaged, not summed)                                       |
+
+Four properties, each with a test:
+
+1. **Never fails the thing it measures.** Every method swallows its own failures
+   into the log. A metric that breaks a child's turn is worse than a missing
+   metric.
+2. **Never carries content.** Payloads are counts, durations and scores.
+   `recordLearningEvent` throws rather than stripping, so a payload carrying
+   content fails a test instead of silently disappearing in production.
+3. **Never double-counts.** Idempotency keyed on the message, conversation or
+   attempt id — a retried request must not inflate a child's morning.
+4. **Reaches the dashboard even when nobody ends the conversation.** A
+   five-year-old does not end conversations; the app gets closed. A worker sweep
+   (`learning.rebuildRollups`, every 5 min) rebuilds days whose events are newer
+   than their rollup.
+
+**The test that was missing is now the test that guards it.**
+`tests/integration/learning-events.test.ts` — 12 tests that drive the real HTTP
+API and read the answer from the endpoint the dashboard reads. None of them
+inserts a learning event.
+
+**A second defect, found by wiring this up.** `learning_events.conversation_id`
+is `on delete set null`, and the table is append-only via a BEFORE UPDATE
+trigger. Those contradict: a set-null IS an update, so **deleting a conversation
+failed** — and through the cascade from `children`, so did deleting a child's
+data. It had been invisible because no event had ever carried a conversation id.
+`20260817300000_learning_events_provenance_delete.sql` narrows the trigger to
+permit exactly that one update — a provenance column moving to null, every other
+column identical — and nothing else. Erasure outranks immutability. Both halves
+are now tested, including deleting a child who has learning events.
 
 ### P-02 · "Stories" is a label, not a feature
 
@@ -245,13 +288,13 @@ that need review before a first submission, not after a rejection.
 
 | Item              | Status   | Evidence level                                                                                                            |
 | ----------------- | -------- | ------------------------------------------------------------------------------------------------------------------------- |
-| Unit tests        | **PASS** | 734 tests. Verified — they run, and they have caught real defects                                                         |
+| Unit tests        | **PASS** | 760 tests. Verified — they run, and they have caught real defects                                                         |
 | Integration tests | **PASS** | 722 tests against the real app, real plugins, real SQL, real RLS                                                          |
 | E2E tests         | **FAIL** | **never executed.** 5 Vitest specs skip without Docker; 7 Playwright specs have never run — browsers were never installed |
 | Performance tests | **PASS** | implemented and executed. Ten scenarios, a concurrency ladder, p50/p95/p99, and they found two real defects               |
 | Security tests    | **PASS** | 49 tests, twelve named attacks, with positive controls so a passing suite cannot be passing against nothing               |
 
-**Current: 1,461 passing, 5 skipped, 0 failing.** Coverage 88.2% statements,
+**Current: 1,482 passing, 5 skipped, 0 failing.** Coverage 88.2% statements,
 90.4% lines, against a 70% floor.
 
 The honest caveat that applies to every row above: **integration tests run
@@ -268,8 +311,9 @@ configuration are not.
    receives it and what duty attaches, which §6.2 of docs/CHILD_SAFETY.md is
    explicit cannot be made by engineers. A configured endpoint with nobody
    trained behind it is not a human path.
-2. **Learning events** (P-01). The parent dashboard is a core promise and it
-   shows zeros.
+2. ~~**Learning events** (P-01). The parent dashboard is a core promise and it
+   shows zeros.~~ **RESOLVED** — talking to the companion now moves the numbers,
+   proven through the HTTP API rather than by seeding the tables.
 3. **Backups**, configured _and_ a restore performed.
 4. **Object storage**, which also unblocks audio retention and multi-instance.
 5. **Distributed rate limiting**, without which every limit multiplies by the

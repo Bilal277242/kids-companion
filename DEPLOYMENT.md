@@ -227,16 +227,23 @@ credentials, and a driver error names the host, the database, and the user.
 
 ## 6. The worker
 
-One process running four scheduled sweeps, three of which are enabled:
+One process running six scheduled sweeps, five of which are enabled:
 
-| Sweep                        | Default interval | What it repairs                                          |
-| ---------------------------- | ---------------- | -------------------------------------------------------- |
-| `subscriptions.sweepExpired` | 5 min            | stored status that has drifted from an elapsed period    |
-| `payments.reconcile`         | 5 min            | payments whose outcome we never heard                    |
-| `storeBilling.synchronise`   | 60 min           | store purchases whose state moved without a notification |
-| audio retention backstop     | —                | **not scheduled — see §9.1**                             |
+| Sweep                            | Default interval | What it repairs                                               |
+| -------------------------------- | ---------------- | ------------------------------------------------------------- |
+| `safety.retryEscalationDelivery` | 1 min            | **a disclosure that has not yet reached a human** — see below |
+| `learning.rebuildRollups`        | 5 min            | progress numbers for conversations nobody ended               |
+| `subscriptions.sweepExpired`     | 5 min            | stored status that has drifted from an elapsed period         |
+| `payments.reconcile`             | 5 min            | payments whose outcome we never heard                         |
+| `storeBilling.synchronise`       | 60 min           | store purchases whose state moved without a notification      |
+| audio retention backstop         | —                | **not scheduled — see §9.1**                                  |
 
-These are backstops, not the primary path. Entitlement is derived from
+The first one is not like the others and is deliberately on the shortest
+interval: every other sweep repairs a number that is stale, that one repairs a
+child whose disclosure could not be routed when it happened. If the worker is
+not running, nothing retries it.
+
+The rest are backstops, not the primary path. Entitlement is derived from
 timestamps on read, so a subscription is expired the moment its window closes
 whether or not a sweep has run. What the sweeps buy is stored state that matches
 reality, and recovery from the two failures that leave it behind: a crash

@@ -21,6 +21,7 @@ import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 
 import { auditOrFail, type AuditLogger } from '../audit.js';
+import { wordCountOf, type LearningRecorder } from '../learning-events.js';
 import { CHILD_FACING_MESSAGE, checkParentalGate } from '../parental-gate.js';
 import { requireChildOwnership } from '../plugins/auth.js';
 import type { EscalationDelivery, EscalationReasonCode } from '../safety-escalation.js';
@@ -74,6 +75,14 @@ export interface ConversationRoutesOptions {
    * prevent.
    */
   readonly escalations?: EscalationDelivery;
+  /**
+   * Records what a child did, for the progress dashboard.
+   *
+   * Optional so a harness that does not care about progress need not supply
+   * one — but without it the dashboard's activity numbers stay at zero, which
+   * is the defect this exists to fix.
+   */
+  readonly learning?: LearningRecorder;
 }
 
 /**
@@ -986,6 +995,18 @@ export const conversationRoutes =
           return { childMessageId, replyMessageId };
         });
 
+        /* --- Progress ------------------------------------------------------
+         * Keyed on the message id, so a retried request cannot count the same
+         * turn twice. Only the WORD COUNT travels; the utterance does not. */
+        if (persisted.childMessageId !== null) {
+          await options.learning?.turn({
+            childId: loaded.conversation.child_id,
+            conversationId,
+            messageId: persisted.childMessageId,
+            wordCount: wordCountOf(request.body.text),
+          });
+        }
+
         /* --- Usage, and the safety events ---------------------------------
          * Both under the SYSTEM context. `usage_daily` and `content_flags` are
          * SELECT-only for a parent by design — a parent must be able to see
@@ -1278,6 +1299,23 @@ export const conversationRoutes =
           },
           request,
         );
+
+        /* The session is over, so nothing is waiting on the aggregation — which
+         * is why this is where the day's rollup gets rebuilt. A parent opening
+         * the dashboard after a chat sees that chat. */
+        const { rows: seconds } = await app.withParent(
+          request,
+          async (tx) =>
+            await tx.query<{ seconds: number }>('select app.conversation_seconds($1) as seconds', [
+              ended.id,
+            ]),
+        );
+
+        await options.learning?.conversationEnded({
+          childId: ended.child_id,
+          conversationId: ended.id,
+          seconds: seconds[0]?.seconds ?? 0,
+        });
 
         return await reply.status(200).send(presentConversation(ended));
       },

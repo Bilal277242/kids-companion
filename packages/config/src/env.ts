@@ -154,6 +154,16 @@ const dataSchema = z.object({
    * hot loop against an endpoint that is already failing.
    */
   WORKER_ESCALATION_RETRY_INTERVAL_MS: intFromEnv({ min: 10_000 }).default(60_000),
+
+  /**
+   * How often to rebuild progress rollups for days whose events are newer.
+   *
+   * The backstop for conversations nobody ends. Five minutes because a parent
+   * checking Progress shortly after a session should see it, and rebuilds
+   * recompute rather than increment — sweeping a day twice is a wasted query
+   * and nothing worse.
+   */
+  WORKER_LEARNING_ROLLUP_INTERVAL_MS: intFromEnv({ min: 10_000 }).default(300_000),
 });
 
 const authSchema = z.object({

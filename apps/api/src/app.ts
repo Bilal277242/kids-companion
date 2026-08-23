@@ -61,6 +61,7 @@ import {
 
 import { createAlertMonitor, createLogAlertSink } from './alerts.js';
 import { createAuditLogger } from './audit.js';
+import { createLearningRecorder } from './learning-events.js';
 import { createPaymentStore } from './payment-store.js';
 import authPlugin from './plugins/auth.js';
 import errorBoundary from './plugins/error-boundary.js';
@@ -73,7 +74,7 @@ import { childRoutes } from './routes/children.js';
 import { consentRoutes } from './routes/consent.js';
 import { conversationRoutes } from './routes/conversations.js';
 import { healthRoutes } from './routes/health.js';
-import { learningRoutes } from './routes/learning.js';
+import { createLearningStore, learningRoutes } from './routes/learning.js';
 import { metricsScrapeRoutes, observabilityRoutes } from './routes/observability.js';
 import { parentRoutes as parentDashboardRoutes } from './routes/parent.js';
 import { parentRoutes as parentAccountRoutes } from './routes/parents.js';
@@ -419,6 +420,18 @@ export const buildApp = async (options: BuildAppOptions) => {
     },
   });
 
+  /**
+   * Records what a child did, so the progress dashboard has something to show.
+   *
+   * The rollup pipeline was already complete and had no producer; this is it.
+   */
+  const learning = createLearningRecorder({
+    db,
+    store: createLearningStore(db),
+    clock,
+    logger: app.log,
+  });
+
   await app.register(
     conversationRoutes({
       engine,
@@ -431,6 +444,7 @@ export const buildApp = async (options: BuildAppOptions) => {
       startRateLimitPerHour: config.RATE_LIMIT_CONVERSATION_START_PER_HOUR,
       clock,
       escalations,
+      learning,
     }),
     { prefix: '/api' },
   );
@@ -469,6 +483,7 @@ export const buildApp = async (options: BuildAppOptions) => {
     practiceRoutes({
       db,
       audit,
+      learning,
       analysis: speechAnalysis,
       storage: audioStorage,
       clock,
@@ -719,6 +734,14 @@ export const buildApp = async (options: BuildAppOptions) => {
      */
     retryEscalationDelivery: async () => await escalations.retryPending(),
 
+    /**
+     * Rebuilds progress rollups for days whose events are newer than them.
+     *
+     * The dashboard reads the rollups, so a conversation nobody ended shows a
+     * parent zeros until this runs.
+     */
+    rebuildLearningRollups: async () => await learning.rebuildStale(),
+
     /** Asks each rail about payments we never heard the outcome of. */
     reconcilePayments: async () => await paymentStore.reconcile(),
 
@@ -744,6 +767,7 @@ declare module 'fastify' {
   interface FastifyInstance {
     readonly maintenance: {
       retryEscalationDelivery(): Promise<{ attempted: number; delivered: number }>;
+      rebuildLearningRollups(): Promise<{ days: number }>;
       sweepExpiredSubscriptions(): Promise<number>;
       reconcilePayments(): Promise<{ checked: number; resolved: number; stillUnresolved: number }>;
       synchroniseStorePurchases(): Promise<{ checked: number; changed: number }>;
