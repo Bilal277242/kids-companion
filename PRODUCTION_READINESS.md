@@ -13,7 +13,7 @@ because the first reading was wrong.
 
 # NOT READY FOR PRODUCTION
 
-**8 PASS · 5 PARTIAL · 4 FAIL** — of seventeen categories.
+**9 PASS · 5 PARTIAL · 3 FAIL** — of seventeen categories.
 
 This is not a close call, and the reason is not the count. One finding is a
 child-safety gap rather than an infrastructure one:
@@ -24,11 +24,10 @@ child-safety gap rather than an infrastructure one:
 > the worker until it lands. **Who that endpoint belongs to remains Q-07 and
 > still blocks launch** — the mechanism exists, the protocol does not. See F-01.
 
-Nothing here should be read as "close, pending sign-off". One of the failures
-(rate limiting) is a missing implementation rather than a setting, and two more
-(backups, domain) are infrastructure that does not exist yet. Storage has moved
-to PARTIAL rather than PASS on purpose: the code is real and tested, and no
-request has ever reached a real bucket.
+Nothing here should be read as "close, pending sign-off". The remaining failures
+(backups, domain, and the two below them) are infrastructure that does not exist
+yet rather than code. Storage sits at PARTIAL on purpose: the code is real and
+tested, and no request has ever reached a real bucket.
 
 Verdicts marked RESOLVED were fixed after this review. The original finding is
 kept verbatim in each case, because what a readiness review said before the fix
@@ -47,7 +46,7 @@ is the part worth being able to read again.
 | 5   | Backups                   | **FAIL**    | None. No script, no schedule, no restore drill                                                       |
 | 6   | Monitoring                | **PASS**    | Alerts reach a configured destination; production refuses to boot without one (F-07 resolved)        |
 | 7   | Logging                   | **PASS**    | Redaction at 100 % coverage, request ids, no internals in responses                                  |
-| 8   | Rate limits               | **FAIL**    | Per-instance and in-memory; behind _N_ instances every limit is *N*×                                 |
+| 8   | Rate limits               | **PASS**    | Counted in Redis; falls back to per-instance rather than open or closed (F-03)                       |
 | 9   | AI limits                 | **PARTIAL** | Per-child and per-plan enforced; the account-wide cost ceiling is not implemented                    |
 | 10  | Payment webhooks          | **PARTIAL** | Mechanism is sound and tested; no rail is verified, so payments cannot run                           |
 | 11  | Mobile configuration      | **FAIL**    | Placeholder bundle ids, version 0.0.0, no build profile, never submitted                             |
@@ -143,7 +142,7 @@ option — a documented procedure whose one prerequisite does not exist.
 **An untested backup is not a backup.** Configure it, then restore from it into
 a scratch database and confirm the data is there.
 
-### F-03 · Rate limits are per-instance · **HIGH**
+### F-03 · Rate limits are per-instance · ~~**HIGH**~~ **RESOLVED**
 
 **Category:** rate limits. `@fastify/rate-limit` runs in-process. Behind _N_
 instances the effective limit is _N_ × the configured value — including
@@ -157,6 +156,53 @@ hard-codes 600/minute where every other limit is configuration.
 **Until this is fixed the API is single-instance.** F-04 no longer requires it
 — audio is now shared — so distributed rate limiting is the remaining blocker on
 running more than one instance.
+
+#### Resolution
+
+A `@fastify/rate-limit` store backed by Redis, so N instances enforce ONE limit.
+Redis was already provisioned and already probed by `/ready`; the limiter simply
+never touched it. `probeRedis`'s own comment said this should be replaced "when
+the limiter moves to Redis, because by then a real client will exist" — it now
+does.
+
+The counter is `INCR` then `PTTL`, setting the expiry only when there is none.
+The obvious version — INCR, then PEXPIRE when the result is 1 — leaves the key
+immortal if the process dies between the two, and a parent locked out
+permanently by a crash is not an acceptable way to fail. Reading the TTL back
+self-heals on the next request, and works on any Redis version rather than
+needing 7's `PEXPIRE ... NX`.
+
+**What happens when Redis is down** is the decision that mattered. Fail open
+removes the auth limiter at exactly the moment an attacker might be why Redis is
+struggling; fail closed turns a cache outage into a total outage for a product a
+child is mid-conversation with. So neither: it falls back to counting in the
+process, which is what the product did before. **An outage costs the improvement,
+never the protection** — and that containment is also what makes a hand-written
+Redis client an acceptable risk, since the worst case of a bug in it is the
+status quo, logged at `error` with `control: rate_limit_store`.
+
+Not a sixth alert condition, deliberately: the list answers "would somebody have
+to get out of bed for this?", and the answer here is no — the limits still work,
+they are just per-instance again.
+
+**Keys are hashed.** The limiter keys on an IP or a parent id, and storing those
+raw would make Redis a new home for personal data — a record of who was where —
+in a system nobody counted as holding any. A hash counts identically. Asserted by
+a test.
+
+**The hard-coded limit is gone.** The review noted the webhook routes hard-coded
+600/minute where every other limit is configuration; it is now
+`RATE_LIMIT_WEBHOOK_PER_MINUTE`, so it can be lowered during an incident without
+a release.
+
+**Verification.** `apps/api/src/rate-limit-store.test.ts` drives two independent
+stores against a real TCP server speaking RESP and asserts the fifth request
+sees 5 rather than 3-and-2. `tests/integration/rate-limiting.test.ts` boots the
+real app, makes real login attempts, and looks in Redis to confirm the counting
+happened there — because a correct store the application never asks is the defect
+that has been found five times in this codebase. Plus 13 tests on the RESP
+parser, focused on replies split across packets, which is how a limiter starts
+attributing counts to the wrong caller.
 
 ### F-04 · Object storage does not exist · ~~**HIGH**~~ **RESOLVED (code) · NOT VERIFIED (against a real bucket)**
 

@@ -13,6 +13,7 @@ const deployedBase = {
   ALERT_WEBHOOK_URL: 'https://alerts.example.com/ops',
   ERROR_TRACKING_PROVIDER: 'webhook',
   ERROR_TRACKING_WEBHOOK_URL: 'https://errors.example.com/ingest',
+  REDIS_URL: 'rediss://cache.example.com:6379',
   STORAGE_PROVIDER: 's3',
   STORAGE_S3_ENDPOINT: 'https://s3.example.com',
   STORAGE_S3_ACCESS_KEY_ID: 'AKIAEXAMPLE',
@@ -164,6 +165,15 @@ describe('cross-field rules', () => {
     expect(() => parseConfig({ ERROR_TRACKING_PROVIDER: 'webhook' })).toThrow(
       /ERROR_TRACKING_WEBHOOK_URL/,
     );
+  });
+
+  it('refuses to start production without redis, because limits would be per-instance', () => {
+    /* The fix for distributed rate limiting is worth nothing if production can
+     * boot without the Redis it depends on: the limiter would fall back to
+     * counting in each process, which is precisely the defect it replaced. */
+    const { REDIS_URL: _omitted, ...withoutRedis } = deployedBase;
+
+    expect(() => parseConfig(withoutRedis)).toThrow(/REDIS_URL/);
   });
 
   it('refuses to start production with in-memory audio storage', () => {

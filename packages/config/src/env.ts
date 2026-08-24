@@ -70,6 +70,18 @@ const rateLimitSchema = z.object({
   // Lower than the text limit: every voice turn costs an STT call and a TTS
   // call on top of the model.
   RATE_LIMIT_VOICE_PER_MINUTE: intFromEnv({ min: 1 }).default(15),
+  /**
+   * The unauthenticated payment-webhook endpoints.
+   *
+   * Generous on purpose: a rail catching up after an outage delivers in bursts,
+   * and rate-limiting a legitimate backlog into failure is worse than the load.
+   * Still bounded, because these endpoints take no credential.
+   *
+   * Configuration rather than a literal because it was the one limit in the
+   * product hard-coded into a route, which meant it could not be lowered during
+   * an incident without a release.
+   */
+  RATE_LIMIT_WEBHOOK_PER_MINUTE: intFromEnv({ min: 1 }).default(600),
   RATE_LIMIT_UPLOAD_PER_MINUTE: intFromEnv({ min: 1 }).default(20),
 });
 
@@ -694,6 +706,12 @@ export const envSchema = baseSchema.superRefine((env, ctx) => {
       issue(
         'SAFETY_ESCALATION_WEBHOOK_URL',
         'is required in production — disclosures must reach a human (docs/CHILD_SAFETY.md §6)',
+      );
+    }
+    if (!env.REDIS_URL) {
+      issue(
+        'REDIS_URL',
+        'is required in production — without it every rate limit is per-instance, so N instances enforce N x the limit, including the auth one that makes password guessing impractical',
       );
     }
     if (env.STORAGE_PROVIDER === 'memory') {

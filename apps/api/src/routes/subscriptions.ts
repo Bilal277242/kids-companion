@@ -40,6 +40,8 @@ import type { SubscriptionReconciler } from '../subscription-reconciler.js';
  */
 
 export interface SubscriptionRoutesOptions {
+  /** The webhook burst ceiling. See RATE_LIMIT_WEBHOOK_PER_MINUTE. */
+  readonly webhookRateLimitPerMinute: number;
   readonly db: Database;
   readonly provider: SubscriptionProvider;
   readonly reconciler: SubscriptionReconciler;
@@ -736,7 +738,7 @@ export const subscriptionRoutes =
             // Generous: a rail catching up after an outage delivers in bursts,
             // and rate-limiting a legitimate backlog into failure is worse than
             // the load. Still bounded, because this endpoint is unauthenticated.
-            rateLimit: { max: 600, timeWindow: '1 minute' },
+            rateLimit: { max: options.webhookRateLimitPerMinute, timeWindow: '1 minute' },
           },
         },
         async (request, reply) => {

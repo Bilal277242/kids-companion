@@ -1,6 +1,6 @@
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
-import rateLimit from '@fastify/rate-limit';
+import rateLimit, { type FastifyRateLimitStoreCtor } from '@fastify/rate-limit';
 import type { Config } from '@kids/config';
 import type { FastifyPluginAsync } from 'fastify';
 import fp from 'fastify-plugin';
@@ -11,7 +11,19 @@ import fp from 'fastify-plugin';
  * Registered at the root so it applies to every route, including ones added
  * later by someone who did not read this file.
  */
-const securityPlugin: FastifyPluginAsync<{ config: Config }> = async (app, opts) => {
+export interface SecurityOptions {
+  readonly config: Config;
+  /**
+   * The shared counter store.
+   *
+   * Absent means count in this process, which is what local, CI and any
+   * deployment without Redis do. See apps/api/src/rate-limit-store.ts for what
+   * that costs and why it is still the right fallback.
+   */
+  readonly rateLimitStore?: FastifyRateLimitStoreCtor | undefined;
+}
+
+const securityPlugin: FastifyPluginAsync<SecurityOptions> = async (app, opts) => {
   const { config } = opts;
 
   await app.register(helmet, {
@@ -39,8 +51,11 @@ const securityPlugin: FastifyPluginAsync<{ config: Config }> = async (app, opts)
     global: true,
     max: config.RATE_LIMIT_GLOBAL_PER_MINUTE,
     timeWindow: '1 minute',
-    // Phase 1 moves this to Redis so limits are shared across instances. In-memory
-    // means each instance enforces its own limit — documented rather than assumed.
+    /* Counted in Redis when one is configured, so N instances enforce ONE
+     * limit rather than N of them. Without it every limit — including the auth
+     * one that makes password guessing impractical — was multiplied by the
+     * instance count. */
+    ...(opts.rateLimitStore ? { store: opts.rateLimitStore } : {}),
     keyGenerator: (request) => request.ip,
     addHeaders: {
       'x-ratelimit-limit': true,

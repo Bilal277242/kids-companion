@@ -463,8 +463,9 @@ install, so no third-party `postinstall` executes during a build.
 
 ## 9. Blockers before any multi-instance deployment
 
-One remains, and it is a missing implementation rather than a configuration
-problem.
+**Both original blockers are resolved in code.** What remains before actually
+running more than one instance is verification against real infrastructure — a
+real bucket and a real Redis — not more code. See §9.3.
 
 ### 9.1 Audio storage is in-memory · ~~**blocker**~~ **RESOLVED in code**
 
@@ -489,14 +490,36 @@ the boot-time refusal is still logged and still correct.
 happened is a request from this codebase reaching a real bucket; see the note in
 §5c.
 
-### 9.2 Rate limiting is per-instance · **blocker**
+### 9.2 Rate limiting is per-instance · ~~**blocker**~~ **RESOLVED**
 
-Covered in §7. Multi-instance deployment multiplies every limit by the instance
-count, including the authentication limit that makes online password guessing
-impractical.
+Multi-instance deployment multiplied every limit by the instance count,
+including the authentication limit that makes online password guessing
+impractical. Redis was already provisioned and already probed by `/ready`; the
+limiter never touched it.
+
+It does now. `@fastify/rate-limit` is given a Redis-backed store whenever
+`REDIS_URL` is set, so N instances enforce one limit. Counter keys are hashed —
+the limiter keys on an IP or a parent id, and Redis must not become a record of
+who was where.
+
+**If Redis becomes unreachable the limiter counts in the process instead**, which
+is what it did before. Not fail-open, which would remove the auth limiter at
+exactly the moment an attacker might be why Redis is struggling; not fail-closed,
+which turns a cache outage into a total outage for a product a child is
+mid-conversation with. An outage costs the improvement, never the protection, and
+logs `control: rate_limit_store` at `error` — **worth alerting on in your log
+platform**, since it is deliberately not one of the five paging conditions.
+
+`RATE_LIMIT_WEBHOOK_PER_MINUTE` also replaces the one limit that was hard-coded
+into a route, so it can be lowered during an incident without a release.
 
 ### 9.3 Also outstanding
 
+- **Neither shared dependency has been exercised for real.** No request from
+  this codebase has reached a real S3 endpoint (§5c) and no limiter has counted
+  against a real Redis. Both are implemented and tested against local doubles;
+  both fail loudly rather than silently if wrong. Standing up staging once is
+  what turns these from implemented into verified.
 - **No distributed lock**, so exactly one worker (§6).
 - **Message encryption uses a `placeholder` codec.** The column and key-id
   plumbing exist; real AES-GCM does not. Conversation content is protected by

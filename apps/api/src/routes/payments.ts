@@ -27,6 +27,8 @@ import type { PaymentStore } from '../payment-store.js';
  */
 
 export interface PaymentRoutesOptions {
+  /** The webhook burst ceiling. See RATE_LIMIT_WEBHOOK_PER_MINUTE. */
+  readonly webhookRateLimitPerMinute: number;
   readonly registry: RailRegistry;
   readonly payments: PaymentStore;
   readonly audit: AuditLogger;
@@ -122,7 +124,7 @@ export const paymentRoutes =
           config: {
             // Generous, because a rail catching up after an outage delivers in
             // bursts and failing a legitimate backlog is worse than the load.
-            rateLimit: { max: 600, timeWindow: '1 minute' },
+            rateLimit: { max: options.webhookRateLimitPerMinute, timeWindow: '1 minute' },
           },
         },
         async (request, reply) => {

@@ -79,6 +79,8 @@ import errorBoundary from './plugins/error-boundary.js';
 import metricsPlugin from './plugins/metrics.js';
 import requestContext from './plugins/request-context.js';
 import security from './plugins/security.js';
+import { createRateLimitStore } from './rate-limit-store.js';
+import { createRedisClient } from './redis-client.js';
 import { authRoutes } from './routes/auth.js';
 import { characterRoutes } from './routes/characters.js';
 import { childRoutes } from './routes/children.js';
@@ -514,7 +516,51 @@ export const buildApp = async (options: BuildAppOptions) => {
   });
 
   await app.register(errorBoundary, { tracker: errorTracker });
-  await app.register(security, { config });
+  /* Rate limiting, shared across instances.
+   *
+   * ═══════════════════════════════════════════════════════════════════════
+   * WITHOUT THIS, EVERY LIMIT WAS MULTIPLIED BY THE INSTANCE COUNT.
+   * ═══════════════════════════════════════════════════════════════════════
+   *
+   * Including `RATE_LIMIT_AUTH_PER_15_MIN`, which is what makes online
+   * password guessing impractical. Redis was already provisioned and already
+   * probed by `/ready`; the limiter simply never touched it.
+   *
+   * Absent Redis, the limiter counts in this process — which is what it did
+   * before. The fallback is inside the store rather than here, so an outage
+   * mid-flight degrades the same way a missing URL does. */
+  const redis =
+    config.REDIS_URL === undefined
+      ? undefined
+      : createRedisClient({
+          url: config.REDIS_URL,
+          tlsEnabled: config.REDIS_TLS_ENABLED,
+          logger: app.log,
+        });
+
+  if (redis === undefined) {
+    app.log.warn(
+      { control: 'rate_limit_store' },
+      'no REDIS_URL configured: rate limits are per-instance, so N instances enforce N x the limit',
+    );
+  }
+
+  app.addHook('onClose', () => {
+    redis?.close();
+  });
+
+  await app.register(security, {
+    config,
+    ...(redis
+      ? {
+          rateLimitStore: createRateLimitStore({
+            redis,
+            keyPrefix: config.REDIS_KEY_PREFIX,
+            logger: app.log,
+          }),
+        }
+      : {}),
+  });
   await app.register(authPlugin, { db, tokens, sessions });
 
   // Multipart is registered ONLY for the voice upload. The byte ceiling is
@@ -763,9 +809,15 @@ export const buildApp = async (options: BuildAppOptions) => {
     reconcileAfterMinutes: config.PAYMENTS_RECONCILE_AFTER_MINUTES,
   });
 
-  await app.register(paymentRoutes({ registry: railRegistry, payments: paymentStore, audit }), {
-    prefix: '/api',
-  });
+  await app.register(
+    paymentRoutes({
+      registry: railRegistry,
+      payments: paymentStore,
+      audit,
+      webhookRateLimitPerMinute: config.RATE_LIMIT_WEBHOOK_PER_MINUTE,
+    }),
+    { prefix: '/api' },
+  );
 
   /* Mobile store billing.
    *
@@ -834,6 +886,7 @@ export const buildApp = async (options: BuildAppOptions) => {
 
   await app.register(
     subscriptionRoutes({
+      webhookRateLimitPerMinute: config.RATE_LIMIT_WEBHOOK_PER_MINUTE,
       db,
       provider: subscriptionProvider,
       reconciler: subscriptionReconciler,

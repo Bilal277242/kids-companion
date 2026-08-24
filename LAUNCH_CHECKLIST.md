@@ -356,13 +356,13 @@ that need review before a first submission, not after a rejection.
 
 | Item              | Status   | Evidence level                                                                                                            |
 | ----------------- | -------- | ------------------------------------------------------------------------------------------------------------------------- |
-| Unit tests        | **PASS** | 850 tests. Verified — they run, and they have caught real defects                                                         |
-| Integration tests | **PASS** | 761 tests against the real app, real plugins, real SQL, real RLS                                                          |
+| Unit tests        | **PASS** | 875 tests. Verified — they run, and they have caught real defects                                                         |
+| Integration tests | **PASS** | 765 tests against the real app, real plugins, real SQL, real RLS                                                          |
 | E2E tests         | **FAIL** | **never executed.** 5 Vitest specs skip without Docker; 7 Playwright specs have never run — browsers were never installed |
 | Performance tests | **PASS** | implemented and executed. Ten scenarios, a concurrency ladder, p50/p95/p99, and they found two real defects               |
 | Security tests    | **PASS** | 49 tests, twelve named attacks, with positive controls so a passing suite cannot be passing against nothing               |
 
-**Current: 1,611 passing, 5 skipped, 0 failing.** Coverage 88.2% statements,
+**Current: 1,640 passing, 5 skipped, 0 failing.** Coverage 88.2% statements,
 90.4% lines, against a 70% floor.
 
 The honest caveat that applies to every row above: **integration tests run
@@ -387,8 +387,10 @@ configuration are not.
    **IMPLEMENTED, NOT VERIFIED** — the adapter and the audio retention sweep are
    real; no request has ever reached a real bucket. Verifying that is a
    deployment step, not a coding one.
-5. **Distributed rate limiting**, without which every limit multiplies by the
-   instance count — including the one that makes password guessing impractical.
+5. ~~**Distributed rate limiting**, without which every limit multiplies by the
+   instance count — including the one that makes password guessing impractical.~~
+   **RESOLVED** — counted in Redis, with a fallback to per-instance counting
+   rather than to allowing or refusing everything.
 6. ~~**Transcript retention**, or withdraw the control that claims it.~~
    **RESOLVED** — the control now does what it says, and a parent is shown the
    retention that applies rather than the one they asked for.
