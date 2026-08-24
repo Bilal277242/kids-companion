@@ -109,13 +109,19 @@ Legend: **Req** = required in production · **Secret** = never in a file, never 
 
 ### Storage
 
-| Variable                         | Req | Secret | Default        | Notes                                                      |
-| -------------------------------- | :-: | :----: | -------------- | ---------------------------------------------------------- |
-| `STORAGE_PROVIDER`               |  ✓  |        | `supabase`     | `supabase` \| `s3`                                         |
-| `STORAGE_BUCKET_AUDIO`           |  ✓  |        | `child-audio`  | **Private.** Public exposure would be a critical breach    |
-| `STORAGE_BUCKET_MEDIA`           |  ✓  |        | `public-media` | Non-personal assets only                                   |
-| `STORAGE_SIGNED_URL_TTL_SECONDS` |     |        | `300`          | Short — a signed URL to child audio is a bearer credential |
-| `S3_*`                           |     |   ✓    | —              | Read only when `STORAGE_PROVIDER=s3`                       |
+| Variable                         | Req | Secret | Default        | Notes                                                                                  |
+| -------------------------------- | :-: | :----: | -------------- | -------------------------------------------------------------------------------------- |
+| `STORAGE_PROVIDER`               |  ✓  |        | `supabase`     | `supabase` \| `s3`                                                                     |
+| `STORAGE_BUCKET_AUDIO`           |  ✓  |        | `child-audio`  | **Private.** Public exposure would be a critical breach                                |
+| `STORAGE_BUCKET_MEDIA`           |  ✓  |        | `public-media` | Non-personal assets only                                                               |
+| `STORAGE_SIGNED_URL_TTL_SECONDS` |     |        | `300`          | Short — a signed URL to child audio is a bearer credential                             |
+| `STORAGE_S3_ENDPOINT`            |     |        | —              | Required when `STORAGE_PROVIDER=s3`. AWS, R2, MinIO, or Supabase Storage's S3 endpoint |
+| `STORAGE_S3_REGION`              |     |        | `us-east-1`    |                                                                                        |
+| `STORAGE_S3_ACCESS_KEY_ID`       |     |   ✓    | —              | Scoped to a bucket of children's voices. Never leaves the server                       |
+| `STORAGE_S3_SECRET_ACCESS_KEY`   |     |   ✓    | —              | As above                                                                               |
+| `STORAGE_S3_SESSION_TOKEN`       |     |   ✓    | —              | For temporary credentials                                                              |
+| `STORAGE_S3_FORCE_PATH_STYLE`    |     |        | `true`         | Required by MinIO and most self-hosted gateways                                        |
+| `STORAGE_S3_TIMEOUT_MS`          |     |        | `10000`        | Per request                                                                            |
 
 ### AI
 
@@ -253,7 +259,7 @@ Legend: **Req** = required in production · **Secret** = never in a file, never 
 | Variable                               | Req | Secret | Default | Notes                                                                                                                                                               |
 | -------------------------------------- | :-: | :----: | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `RETENTION_RAW_AUDIO_DAYS`             |  ✓  |        | `0`     | **`0` = discard at transcription.** Any non-zero value in production requires documented parent opt-in ([ADR-0006](adr/0006-voice-pipeline-and-audio-retention.md)) |
-| `RETENTION_TRANSCRIPT_DAYS`            |  ✓  |        | `90`    | Parent-configurable 0–365                                                                                                                                           |
+| `RETENTION_TRANSCRIPT_DAYS`            |  ✓  |        | `90`    | A **ceiling** on the per-child setting; where they differ the shorter wins                                                                                          |
 | `RETENTION_ANALYTICS_EVENT_DAYS`       |  ✓  |        | `395`   |                                                                                                                                                                     |
 | `RETENTION_AUDIT_LOG_DAYS`             |  ✓  |        | `730`   |                                                                                                                                                                     |
 | `RETENTION_DELETED_ACCOUNT_GRACE_DAYS` |  ✓  |        | `30`    | Then irreversible hard delete                                                                                                                                       |
@@ -276,15 +282,15 @@ A flag is removed once its feature is permanent. Flags that outlive their rollou
 
 The schema enforces relationships, not just individual values. Each of these is a real misconfiguration that a per-field schema would accept:
 
-| Condition                                               | Requirement                                                                                                                                                                                                                   |
-| ------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `AI_PROVIDER=anthropic`                                 | `ANTHROPIC_API_KEY` present                                                                                                                                                                                                   |
-| `STT_PROVIDER=deepgram`                                 | `DEEPGRAM_API_KEY` present                                                                                                                                                                                                    |
-| `STORAGE_PROVIDER=s3`                                   | All `S3_*` present                                                                                                                                                                                                            |
-| `APP_ENV=production`                                    | `DATABASE_SSL_MODE=require`, `REDIS_TLS_ENABLED=true`, `API_TRUST_PROXY` explicitly set, no wildcard in `CORS_ALLOWED_ORIGINS`, `LOG_LEVEL` not `trace`, all `SAFETY_*_ENABLED=true`, `SAFETY_ESCALATION_WEBHOOK_URL` present |
-| `PAYMENTS_ENABLED=true`                                 | At least one payment provider fully configured, with its webhook secret                                                                                                                                                       |
-| `RETENTION_RAW_AUDIO_DAYS > 0` and `APP_ENV=production` | Boot fails without an explicit `RETENTION_RAW_AUDIO_OPT_IN_ACK` acknowledgement                                                                                                                                               |
-| `ANALYTICS_ENABLED=true`                                | `ANALYTICS_WRITE_KEY` present                                                                                                                                                                                                 |
+| Condition                                               | Requirement                                                                                                                                                                                                                                                                                                                       |
+| ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `AI_PROVIDER=anthropic`                                 | `ANTHROPIC_API_KEY` present                                                                                                                                                                                                                                                                                                       |
+| `STT_PROVIDER=deepgram`                                 | `DEEPGRAM_API_KEY` present                                                                                                                                                                                                                                                                                                        |
+| `STORAGE_PROVIDER=s3`                                   | `STORAGE_S3_ENDPOINT`, `STORAGE_S3_ACCESS_KEY_ID` and `STORAGE_S3_SECRET_ACCESS_KEY` present                                                                                                                                                                                                                                      |
+| `APP_ENV=production`                                    | `DATABASE_SSL_MODE=require`, `REDIS_TLS_ENABLED=true`, `API_TRUST_PROXY` explicitly set, no wildcard in `CORS_ALLOWED_ORIGINS`, `LOG_LEVEL` not `trace`, all `SAFETY_*_ENABLED=true`, `SAFETY_ESCALATION_WEBHOOK_URL` present, `ALERT_WEBHOOK_URL` present, `ERROR_TRACKING_PROVIDER` not `none`, `STORAGE_PROVIDER` not `memory` |
+| `PAYMENTS_ENABLED=true`                                 | At least one payment provider fully configured, with its webhook secret                                                                                                                                                                                                                                                           |
+| `RETENTION_RAW_AUDIO_DAYS > 0` and `APP_ENV=production` | Boot fails without an explicit `RETENTION_RAW_AUDIO_OPT_IN_ACK` acknowledgement                                                                                                                                                                                                                                                   |
+| `ANALYTICS_ENABLED=true`                                | `ANALYTICS_WRITE_KEY` present                                                                                                                                                                                                                                                                                                     |
 
 The last one in the production row is worth noting: it means a deploy that accidentally disables the safety classifiers **will not start**. That is the intended behaviour.
 

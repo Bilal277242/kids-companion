@@ -14,8 +14,8 @@ executed. Nothing is marked PASS for existing.
 |                  | Count |
 | ---------------- | ----: |
 | **PASS**         |    23 |
-| **FAIL**         |     6 |
-| **NOT VERIFIED** |    17 |
+| **FAIL**         |     5 |
+| **NOT VERIFIED** |    18 |
 
 **Not one item in Infrastructure or Mobile passes.** No container has been
 built, no environment has ever run, no build has been produced for either
@@ -248,15 +248,15 @@ audit row and a log line and reaches no human.
 
 ## Security
 
-| Item             | Status   | Evidence level                                                                                                                                                                                                                                                                                                                                                                                            |
-| ---------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Authentication   | **PASS** | implemented, tested. Argon2id at the OWASP floor, timing-safe unknown-account path, session revocation                                                                                                                                                                                                                                                                                                    |
-| Authorization    | **PASS** | implemented, tested. Role and permission checks, ownership checks, 403 and 404 deliberately indistinguishable                                                                                                                                                                                                                                                                                             |
-| RLS              | **PASS** | implemented, tested. All **50** tables `ENABLE` **and** `FORCE`, proven by a catalogue query that fails on any new table. Behavioural denial tested across the tenant-critical surface                                                                                                                                                                                                                    |
-| Secrets          | **PASS** | implemented, tested. Nothing in any image layer, no build args, history scanned in CI, workflows blocked from echoing a secret                                                                                                                                                                                                                                                                            |
-| API security     | **PASS** | implemented, tested. Helmet, CORS with no wildcard in deployed environments, Zod response schemas as a privacy control, no internals in errors. **Rate limiting is per-instance and in-memory** — behind N instances every limit is N times the configured value, including the authentication limit. That is a capacity and abuse concern, not an API-surface defect, and it is listed as blocking below |
-| Storage          | **FAIL** | Only an in-memory implementation exists. Audio does not survive a restart and is not shared between instances                                                                                                                                                                                                                                                                                             |
-| Payment webhooks | **PASS** | implemented, tested. Signature verified first, idempotent, replay-safe by two mechanisms, one transaction                                                                                                                                                                                                                                                                                                 |
+| Item             | Status           | Evidence level                                                                                                                                                                                                                                                                                                                                                                                            |
+| ---------------- | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Authentication   | **PASS**         | implemented, tested. Argon2id at the OWASP floor, timing-safe unknown-account path, session revocation                                                                                                                                                                                                                                                                                                    |
+| Authorization    | **PASS**         | implemented, tested. Role and permission checks, ownership checks, 403 and 404 deliberately indistinguishable                                                                                                                                                                                                                                                                                             |
+| RLS              | **PASS**         | implemented, tested. All **50** tables `ENABLE` **and** `FORCE`, proven by a catalogue query that fails on any new table. Behavioural denial tested across the tenant-critical surface                                                                                                                                                                                                                    |
+| Secrets          | **PASS**         | implemented, tested. Nothing in any image layer, no build args, history scanned in CI, workflows blocked from echoing a secret                                                                                                                                                                                                                                                                            |
+| API security     | **PASS**         | implemented, tested. Helmet, CORS with no wildcard in deployed environments, Zod response schemas as a privacy control, no internals in errors. **Rate limiting is per-instance and in-memory** — behind N instances every limit is N times the configured value, including the authentication limit. That is a capacity and abuse concern, not an API-surface defect, and it is listed as blocking below |
+| Storage          | **NOT VERIFIED** | implemented, tested against a local server; **never run against a real bucket**. The audio retention sweep is now schedulable                                                                                                                                                                                                                                                                             |
+| Payment webhooks | **PASS**         | implemented, tested. Signature verified first, idempotent, replay-safe by two mechanisms, one transaction                                                                                                                                                                                                                                                                                                 |
 
 RLS deserves its PASS with a stated limit: **85 policies are declared and not
 each individually driven by a behavioural test.** The structural guarantee is
@@ -356,13 +356,13 @@ that need review before a first submission, not after a rejection.
 
 | Item              | Status   | Evidence level                                                                                                            |
 | ----------------- | -------- | ------------------------------------------------------------------------------------------------------------------------- |
-| Unit tests        | **PASS** | 812 tests. Verified — they run, and they have caught real defects                                                         |
+| Unit tests        | **PASS** | 850 tests. Verified — they run, and they have caught real defects                                                         |
 | Integration tests | **PASS** | 761 tests against the real app, real plugins, real SQL, real RLS                                                          |
 | E2E tests         | **FAIL** | **never executed.** 5 Vitest specs skip without Docker; 7 Playwright specs have never run — browsers were never installed |
 | Performance tests | **PASS** | implemented and executed. Ten scenarios, a concurrency ladder, p50/p95/p99, and they found two real defects               |
 | Security tests    | **PASS** | 49 tests, twelve named attacks, with positive controls so a passing suite cannot be passing against nothing               |
 
-**Current: 1,573 passing, 5 skipped, 0 failing.** Coverage 88.2% statements,
+**Current: 1,611 passing, 5 skipped, 0 failing.** Coverage 88.2% statements,
 90.4% lines, against a 70% floor.
 
 The honest caveat that applies to every row above: **integration tests run
@@ -383,7 +383,10 @@ configuration are not.
    shows zeros.~~ **RESOLVED** — talking to the companion now moves the numbers,
    proven through the HTTP API rather than by seeding the tables.
 3. **Backups**, configured _and_ a restore performed.
-4. **Object storage**, which also unblocks audio retention and multi-instance.
+4. ~~**Object storage**, which also unblocks audio retention and multi-instance.~~
+   **IMPLEMENTED, NOT VERIFIED** — the adapter and the audio retention sweep are
+   real; no request has ever reached a real bucket. Verifying that is a
+   deployment step, not a coding one.
 5. **Distributed rate limiting**, without which every limit multiplies by the
    instance count — including the one that makes password guessing impractical.
 6. ~~**Transcript retention**, or withdraw the control that claims it.~~

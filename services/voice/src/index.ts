@@ -62,6 +62,17 @@ export {
   type MemoryAudioStorageOptions,
 } from './storage.js';
 
+export { createS3AudioStorage, type S3AudioStorageOptions } from './s3-storage.js';
+
+export {
+  amzDates,
+  canonicalRequest,
+  signRequest,
+  signingKey,
+  uriEncode,
+  type S3Credentials,
+} from './s3-signing.js';
+
 export {
   createMockSttProvider,
   createMockTtsProvider,

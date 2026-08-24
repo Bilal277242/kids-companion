@@ -45,6 +45,7 @@ import {
   createElevenLabsProvider,
   createMemoryAudioStorage,
   createMemoryTtsCache,
+  createS3AudioStorage,
   createMockSttProvider,
   createMockTtsProvider,
   type AudioStorage,
@@ -92,7 +93,7 @@ import { paymentRoutes } from './routes/payments.js';
 import { practiceRoutes } from './routes/practice.js';
 import { storeBillingRoutes } from './routes/store-billing.js';
 import { subscriptionRoutes } from './routes/subscriptions.js';
-import { voiceRoutes } from './routes/voice.js';
+import { sweepExpiredAudio, voiceRoutes } from './routes/voice.js';
 import { createEscalationDelivery } from './safety-escalation.js';
 import { createAttemptCounter, createPolicyStore } from './safety-store.js';
 import { createStoreBilling } from './store-billing.js';
@@ -330,7 +331,40 @@ export const buildApp = async (options: BuildAppOptions) => {
     ? { now: () => options.now!().getTime(), nowIso: () => options.now!().toISOString() as never }
     : systemClock;
 
-  const audioStorage = options.audioStorage ?? createMemoryAudioStorage({ clock });
+  /* Audio storage.
+   *
+   * ═══════════════════════════════════════════════════════════════════════
+   * WHICH ONE IS RUNNING DECIDES WHETHER RETENTION CAN BE SWEPT AT ALL.
+   * ═══════════════════════════════════════════════════════════════════════
+   *
+   * The in-memory store is a real implementation — it enforces expiry on read
+   * and bounds its own size — but the bytes live in THIS process. A sweep from
+   * the worker would mark the retention ledger while the objects stayed alive
+   * in the API's heap, and a record asserting a deletion that did not happen is
+   * worse than no sweep, because it is the record somebody would rely on.
+   *
+   * A shared store removes that gap: the DELETE is the deletion. Production
+   * refuses `memory` for exactly this reason. */
+  const audioStorage =
+    options.audioStorage ??
+    (config.STORAGE_PROVIDER === 's3' &&
+    config.STORAGE_S3_ENDPOINT !== undefined &&
+    config.STORAGE_S3_ACCESS_KEY_ID !== undefined &&
+    config.STORAGE_S3_SECRET_ACCESS_KEY !== undefined
+      ? createS3AudioStorage({
+          clock,
+          endpoint: config.STORAGE_S3_ENDPOINT,
+          region: config.STORAGE_S3_REGION,
+          bucket: config.STORAGE_BUCKET_AUDIO,
+          credentials: {
+            accessKeyId: config.STORAGE_S3_ACCESS_KEY_ID,
+            secretAccessKey: config.STORAGE_S3_SECRET_ACCESS_KEY,
+            sessionToken: config.STORAGE_S3_SESSION_TOKEN,
+          },
+          forcePathStyle: config.STORAGE_S3_FORCE_PATH_STYLE,
+          timeoutMs: config.STORAGE_S3_TIMEOUT_MS,
+        })
+      : createMemoryAudioStorage({ clock }));
 
   // Pronunciation analysis. The transcription-backed provider is the honest
   // default for a real deployment: it reports `utterance` granularity, which
@@ -909,7 +943,18 @@ export const buildApp = async (options: BuildAppOptions) => {
      * record asserting a deletion that did not happen, which is worse than not
      * sweeping at all. See DEPLOYMENT.md.
      */
-    audioSweepIsShared: false,
+    /**
+     * Whether audio retention can be swept from ANOTHER process.
+     *
+     * True exactly when the object store is shared. With the in-memory store
+     * the bytes are in the API's heap and a sweep elsewhere would mark the
+     * ledger while the objects survived — so the worker refuses to schedule it
+     * and says so on every boot.
+     */
+    audioSweepIsShared: audioStorage.name !== 'memory',
+
+    /** Deletes audio past its expiry, and the ledger rows that describe it. */
+    sweepExpiredAudio: async () => await sweepExpiredAudio(db, audioStorage),
   });
 
   return app;
@@ -924,6 +969,7 @@ declare module 'fastify' {
       sweepExpiredSubscriptions(): Promise<number>;
       reconcilePayments(): Promise<{ checked: number; resolved: number; stillUnresolved: number }>;
       synchroniseStorePurchases(): Promise<{ checked: number; changed: number }>;
+      sweepExpiredAudio(): Promise<{ ledger: number; objects: number }>;
       readonly audioSweepIsShared: boolean;
     };
   }

@@ -13,6 +13,10 @@ const deployedBase = {
   ALERT_WEBHOOK_URL: 'https://alerts.example.com/ops',
   ERROR_TRACKING_PROVIDER: 'webhook',
   ERROR_TRACKING_WEBHOOK_URL: 'https://errors.example.com/ingest',
+  STORAGE_PROVIDER: 's3',
+  STORAGE_S3_ENDPOINT: 'https://s3.example.com',
+  STORAGE_S3_ACCESS_KEY_ID: 'AKIAEXAMPLE',
+  STORAGE_S3_SECRET_ACCESS_KEY: 'not-a-real-secret-for-tests',
   CORS_ALLOWED_ORIGINS: 'https://app.example.com',
   // A deployed environment must name a real rail; the mock one is refused.
   PAYMENTS_PROVIDER: 'stripe',
@@ -160,6 +164,28 @@ describe('cross-field rules', () => {
     expect(() => parseConfig({ ERROR_TRACKING_PROVIDER: 'webhook' })).toThrow(
       /ERROR_TRACKING_WEBHOOK_URL/,
     );
+  });
+
+  it('refuses to start production with in-memory audio storage', () => {
+    /* The consequence is not "audio is slower to find". The retention sweep
+     * could not run at all: the bytes would live in the API's heap, so a sweep
+     * from the worker would mark the ledger while the objects survived. */
+    expect(() => parseConfig({ ...deployedBase, STORAGE_PROVIDER: 'memory' })).toThrow(
+      /STORAGE_PROVIDER/,
+    );
+  });
+
+  it('refuses an s3 provider with no endpoint or credentials', () => {
+    // A provider naming no destination is a silent no-op — refused in every
+    // environment, not only production.
+    expect(() => parseConfig({ STORAGE_PROVIDER: 's3' })).toThrow(/STORAGE_S3_ENDPOINT/);
+    expect(() =>
+      parseConfig({ STORAGE_PROVIDER: 's3', STORAGE_S3_ENDPOINT: 'https://s3.example.com' }),
+    ).toThrow(/STORAGE_S3_ACCESS_KEY_ID/);
+  });
+
+  it('defaults to in-memory storage outside production, which is the right default there', () => {
+    expect(parseConfig({}).STORAGE_PROVIDER).toBe('memory');
   });
 
   it('refuses to retain raw child audio in production without explicit acknowledgement', () => {

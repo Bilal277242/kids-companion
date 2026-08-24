@@ -197,10 +197,46 @@ const authSchema = z.object({
 });
 
 const providerSchema = z.object({
-  STORAGE_PROVIDER: z.enum(['supabase', 's3']).default('supabase'),
+  /**
+   * Where audio actually lives.
+   *
+   * `memory` is a real implementation — it enforces expiry on read, deletes on
+   * sweep, and bounds its own size — but the bytes live in ONE process. That
+   * means audio does not survive a restart, is not shared between instances,
+   * and the retention sweep cannot run from the worker: it would mark the
+   * ledger while the bytes stayed alive in the API's heap, and a retention
+   * record asserting a deletion that did not happen is worse than no sweep.
+   *
+   * `s3` is any S3-compatible endpoint — AWS, Cloudflare R2, MinIO, or Supabase
+   * Storage through its S3-compatible endpoint. Refused as `memory` in
+   * production for the reasons above.
+   *
+   * The previous `supabase` value was never read by any code. It is gone rather
+   * than aliased, because a name that implies a code path which does not exist
+   * is how this key came to be declared and unread in the first place.
+   */
+  STORAGE_PROVIDER: z.enum(['memory', 's3']).default('memory'),
   STORAGE_BUCKET_AUDIO: z.string().min(1).default('child-audio'),
   STORAGE_BUCKET_MEDIA: z.string().min(1).default('public-media'),
   STORAGE_SIGNED_URL_TTL_SECONDS: intFromEnv({ min: 30, max: 3_600 }).default(300),
+
+  /** e.g. https://s3.eu-west-1.amazonaws.com, an R2 endpoint, or MinIO. */
+  STORAGE_S3_ENDPOINT: urlFromEnv.optional(),
+  STORAGE_S3_REGION: z.string().min(1).default('us-east-1'),
+  /** SECRETS. Never logged, never sent to a device, never in an error message. */
+  STORAGE_S3_ACCESS_KEY_ID: z.string().optional(),
+  STORAGE_S3_SECRET_ACCESS_KEY: z.string().optional(),
+  /** For temporary credentials from STS or a workload identity broker. */
+  STORAGE_S3_SESSION_TOKEN: z.string().optional(),
+  /**
+   * Path-style addressing (`endpoint/bucket/key`) rather than virtual-host.
+   *
+   * Required by MinIO and most self-hosted gateways; AWS accepts both. Default
+   * true because the wrong choice fails as a confusing DNS error rather than a
+   * clear rejection.
+   */
+  STORAGE_S3_FORCE_PATH_STYLE: boolFromEnv.default(true),
+  STORAGE_S3_TIMEOUT_MS: intFromEnv({ min: 1_000, max: 60_000 }).default(10_000),
 
   AI_PROVIDER: z.enum(['anthropic', 'openai', 'mock']).default('mock'),
   AI_MODEL_CONVERSATION: z.string().optional(),
@@ -607,6 +643,17 @@ export const envSchema = baseSchema.superRefine((env, ctx) => {
   }
   // A named provider with no destination is a silent no-op, which is the state
   // error tracking was already in for months. Refused in every environment.
+  if (env.STORAGE_PROVIDER === 's3') {
+    if (!env.STORAGE_S3_ENDPOINT) {
+      issue('STORAGE_S3_ENDPOINT', 'is required when STORAGE_PROVIDER=s3');
+    }
+    if (!env.STORAGE_S3_ACCESS_KEY_ID || !env.STORAGE_S3_SECRET_ACCESS_KEY) {
+      issue(
+        'STORAGE_S3_ACCESS_KEY_ID',
+        'and STORAGE_S3_SECRET_ACCESS_KEY are required when STORAGE_PROVIDER=s3',
+      );
+    }
+  }
   if (env.ERROR_TRACKING_PROVIDER === 'sentry' && !env.SENTRY_DSN) {
     issue('SENTRY_DSN', 'is required when ERROR_TRACKING_PROVIDER=sentry');
   }
@@ -647,6 +694,12 @@ export const envSchema = baseSchema.superRefine((env, ctx) => {
       issue(
         'SAFETY_ESCALATION_WEBHOOK_URL',
         'is required in production — disclosures must reach a human (docs/CHILD_SAFETY.md §6)',
+      );
+    }
+    if (env.STORAGE_PROVIDER === 'memory') {
+      issue(
+        'STORAGE_PROVIDER',
+        'cannot be memory in production — audio would not survive a restart, would not be shared between instances, and the retention sweep could not run',
       );
     }
     if (env.ERROR_TRACKING_PROVIDER === 'none') {

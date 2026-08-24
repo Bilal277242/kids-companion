@@ -276,6 +276,49 @@ Only 5xx responses are captured, deduplicated by fingerprint, and correlated to
 
 ---
 
+## 5c. Object storage
+
+`STORAGE_PROVIDER` must be `s3` in production — the API refuses to boot on
+`memory`.
+
+| Variable                       | Default       | Notes                                      |
+| ------------------------------ | ------------- | ------------------------------------------ |
+| `STORAGE_PROVIDER`             | `memory`      | `memory` or `s3`; `memory` refused in prod |
+| `STORAGE_S3_ENDPOINT`          | —             | required when provider is `s3`             |
+| `STORAGE_S3_REGION`            | `us-east-1`   |                                            |
+| `STORAGE_S3_ACCESS_KEY_ID`     | —             | **secret**                                 |
+| `STORAGE_S3_SECRET_ACCESS_KEY` | —             | **secret**                                 |
+| `STORAGE_S3_SESSION_TOKEN`     | —             | **secret**; for temporary credentials      |
+| `STORAGE_S3_FORCE_PATH_STYLE`  | `true`        | required by MinIO and most gateways        |
+| `STORAGE_S3_TIMEOUT_MS`        | `10000`       | per request                                |
+| `STORAGE_BUCKET_AUDIO`         | `child-audio` |                                            |
+
+Any S3-compatible endpoint works: AWS, Cloudflare R2, MinIO, or Supabase Storage
+through its S3-compatible endpoint. There is **no AWS SDK** in this repository —
+SigV4 is written out, for the same reason the Redis probe speaks RESP directly.
+
+**The bucket holds children's voice recordings. Two things follow.**
+
+The credentials are secrets and belong in the secret manager. They never leave
+the server: there is no presigned URL anywhere in this codebase and the adapter
+exposes no method that could mint one, which is asserted by a test. A mobile app
+posts bytes to our API and fetches reply audio from our API.
+
+Give the credential the narrowest policy that works — `GetObject`, `PutObject`,
+`DeleteObject`, `ListBucket` on that bucket and nothing else — and make the
+bucket private with public access blocked. A **bucket lifecycle rule is not a
+substitute for the sweep**: it is provider configuration this application cannot
+see, cannot test, and cannot prove ran, and the retention record has to agree
+with the bytes. Set one if you like, as a second line.
+
+> **NOT YET VERIFIED.** No request from this codebase has ever reached a real S3
+> endpoint. The signing is implemented and structurally tested; conformance is
+> proven by the first successful voice turn against a real bucket, and that has
+> not happened. A wrong signature 403s immediately rather than failing quietly,
+> so this is a step to complete before staging traffic, not a risk to monitor.
+
+---
+
 ## 6. The worker
 
 One process running seven scheduled sweeps, six of which are enabled:
@@ -287,11 +330,11 @@ One process running seven scheduled sweeps, six of which are enabled:
 | `subscriptions.sweepExpired`     | 5 min            | stored status that has drifted from an elapsed period         |
 | `payments.reconcile`             | 5 min            | payments whose outcome we never heard                         |
 | `privacy.expireTranscripts`      | 60 min           | **deletes transcripts past their retention** — see below      |
+| `privacy.expireAudio`            | 15 min           | **deletes audio past its expiry** — only with a shared store  |
 | `storeBilling.synchronise`       | 60 min           | store purchases whose state moved without a notification      |
-| audio retention backstop         | —                | **not scheduled — see §9.1**                                  |
 
-**Two of these are not backstops, and the worker not running is a real problem
-for both.**
+**Three of these are not backstops, and the worker not running is a real problem
+for all of them.**
 
 `safety.retryEscalationDelivery` is on the shortest interval because it repairs
 a child whose disclosure could not be routed when it happened. If the worker is
@@ -308,6 +351,12 @@ deletion that did not happen.
 floor — where they differ the shorter wins. Each sweep writes one audit row per
 child (`privacy.transcript.redacted`) carrying a count, so the promise is
 checkable. See [PRIVACY.md](PRIVACY.md).
+
+`privacy.expireAudio` is scheduled **only when `STORAGE_PROVIDER=s3`**. With the
+in-memory store the bytes are in the API's heap, so a sweep from the worker would
+mark the ledger while the objects survived — a retention record asserting a
+deletion that did not happen, which is worse than no sweep. When storage is
+in-memory the worker logs the refusal on every boot instead. See §5c.
 
 The rest are backstops, not the primary path. Entitlement is derived from
 timestamps on read, so a subscription is expired the moment its window closes
@@ -414,28 +463,31 @@ install, so no third-party `postinstall` executes during a build.
 
 ## 9. Blockers before any multi-instance deployment
 
-Neither is a configuration problem. Both are missing implementations.
+One remains, and it is a missing implementation rather than a configuration
+problem.
 
-### 9.1 Audio storage is in-memory · **blocker**
+### 9.1 Audio storage is in-memory · ~~**blocker**~~ **RESOLVED in code**
 
-`createMemoryAudioStorage` is the only `AudioStorage` implementation. There is
-no Supabase or S3 adapter, despite `STORAGE_PROVIDER` existing in the config
-schema.
+`createMemoryAudioStorage` was the only `AudioStorage` implementation, despite
+`STORAGE_PROVIDER` existing in the config schema and being read by nothing.
 
-Consequences:
+Consequences at the time:
 
-- **Audio does not survive a restart**, and is not shared between instances. A
-  signed audio URL issued by instance A returns 404 on instance B.
-- **The retention backstop cannot run in the worker.** The bytes live in
+- **Audio did not survive a restart**, and was not shared between instances.
+- **The retention backstop could not run in the worker.** The bytes lived in
   whichever process wrote them, so a sweep from the worker would mark the ledger
   rows deleted while the objects survived in the API's heap — a retention record
   asserting a deletion that did not happen, which is worse than no sweep because
-  it is the record someone would rely on. The worker logs this at `warn` on every
-  boot rather than omitting it silently.
+  it is the record someone would rely on.
 
-Until a shared object store exists, the API is **single-instance** and audio
-retention has no scheduled backstop. Inline deletion when a turn ends still
-happens; the backstop for deletions that failed does not.
+An S3-compatible adapter now exists (§5c), `STORAGE_PROVIDER` is read, `memory`
+is refused in production, and the worker schedules `privacy.expireAudio` exactly
+when the store is shared. In-memory remains the default for local and CI, where
+the boot-time refusal is still logged and still correct.
+
+**Storage is no longer what keeps this single-instance** — §9.2 is. What has NOT
+happened is a request from this codebase reaching a real bucket; see the note in
+§5c.
 
 ### 9.2 Rate limiting is per-instance · **blocker**
 

@@ -13,7 +13,7 @@ because the first reading was wrong.
 
 # NOT READY FOR PRODUCTION
 
-**8 PASS · 4 PARTIAL · 5 FAIL** — of seventeen categories.
+**8 PASS · 5 PARTIAL · 4 FAIL** — of seventeen categories.
 
 This is not a close call, and the reason is not the count. One finding is a
 child-safety gap rather than an infrastructure one:
@@ -24,9 +24,11 @@ child-safety gap rather than an infrastructure one:
 > the worker until it lands. **Who that endpoint belongs to remains Q-07 and
 > still blocks launch** — the mechanism exists, the protocol does not. See F-01.
 
-Nothing here should be read as "close, pending sign-off". Two of the failures
-(storage, rate limiting) are missing implementations, not settings, and two more
-(backups, domain) are infrastructure that does not exist yet.
+Nothing here should be read as "close, pending sign-off". One of the failures
+(rate limiting) is a missing implementation rather than a setting, and two more
+(backups, domain) are infrastructure that does not exist yet. Storage has moved
+to PARTIAL rather than PASS on purpose: the code is real and tested, and no
+request has ever reached a real bucket.
 
 Verdicts marked RESOLVED were fixed after this review. The original finding is
 kept verbatim in each case, because what a readiness review said before the fix
@@ -49,7 +51,7 @@ is the part worth being able to read again.
 | 9   | AI limits                 | **PARTIAL** | Per-child and per-plan enforced; the account-wide cost ceiling is not implemented                    |
 | 10  | Payment webhooks          | **PARTIAL** | Mechanism is sound and tested; no rail is verified, so payments cannot run                           |
 | 11  | Mobile configuration      | **FAIL**    | Placeholder bundle ids, version 0.0.0, no build profile, never submitted                             |
-| 12  | Storage                   | **FAIL**    | Only an in-memory implementation exists                                                              |
+| 12  | Storage                   | **PARTIAL** | S3 adapter implemented and tested; never run against a real bucket (F-04)                            |
 | 13  | Domain configuration      | **FAIL**    | No domain. Every hostname in the templates is an example                                             |
 | 14  | SSL                       | **PARTIAL** | Enforced everywhere in config; no certificate or terminator exists to enforce it on                  |
 | 15  | CORS                      | **PASS**    | Explicit origins, wildcard refused at boot in any deployed environment                               |
@@ -68,7 +70,7 @@ by any code.** Several are the _only_ mechanism their category has.
 | ~~`SAFETY_ESCALATION_WEBHOOK_URL`~~ | child safety           | **RESOLVED** — read, routed, retried (F-01)           |
 | `AI_DAILY_COST_CEILING_USD`         | AI limits              | No account-wide spend ceiling                         |
 | ~~`SENTRY_DSN`~~                    | error tracking         | **RESOLVED** — read, with no SDK attached (F-06)      |
-| `STORAGE_PROVIDER`                  | storage                | No object store                                       |
+| ~~`STORAGE_PROVIDER`~~              | storage                | **RESOLVED** — read; `memory` refused in production   |
 | `OTEL_EXPORTER_OTLP_ENDPOINT`       | monitoring             | No tracing                                            |
 | `ENCRYPTION_ACTIVE_KEY_ID`          | database               | Key id is hard-coded `'placeholder'`                  |
 | ~~`RETENTION_TRANSCRIPT_DAYS`~~     | privacy                | **RESOLVED** — a ceiling the sweep enforces (F-05)    |
@@ -152,10 +154,11 @@ Redis is provisioned in staging and probed by `/ready`, but the limiter never
 touches it. Also worth deciding deliberately: the subscription webhook route
 hard-codes 600/minute where every other limit is configuration.
 
-**Until this is fixed the API is single-instance**, which is also what F-04
-requires.
+**Until this is fixed the API is single-instance.** F-04 no longer requires it
+— audio is now shared — so distributed rate limiting is the remaining blocker on
+running more than one instance.
 
-### F-04 · Object storage does not exist · **HIGH**
+### F-04 · Object storage does not exist · ~~**HIGH**~~ **RESOLVED (code) · NOT VERIFIED (against a real bucket)**
 
 **Category:** storage. `createMemoryAudioStorage` is the only `AudioStorage`
 implementation; `STORAGE_PROVIDER` is never read. Three consequences:
@@ -167,6 +170,68 @@ implementation; `STORAGE_PROVIDER` is never read. Three consequences:
   while the objects survived in the API's heap — a retention record asserting a
   deletion that did not happen. The worker refuses to schedule it and logs why
   on every boot.
+
+#### Resolution
+
+`createS3AudioStorage` — any S3-compatible endpoint: AWS, Cloudflare R2, MinIO,
+or Supabase Storage through its S3-compatible endpoint. `STORAGE_PROVIDER` is
+read at last, and production refuses `memory`.
+
+**The third consequence is the one that mattered, and it is now closed.** The
+worker schedules `privacy.expireAudio` exactly when the store is shared, decided
+by `audioStorage.name !== 'memory'` rather than by a constant. With a shared
+store the DELETE is the deletion, so the ledger and the bytes agree. Local and CI
+keep the in-memory store and keep the boot-time refusal, which is still the
+honest thing to say there.
+
+**No SDK.** Same reasoning as the Redis probe and the error tracker:
+`@aws-sdk/client-s3` pulls a large dependency tree, retries and instruments on
+its own schedule, and would put a third party between this service and a bucket
+of children's voice recordings. SigV4 is written out — it is fully specified,
+deterministic, and unforgiving in the useful direction: a signature wrong by one
+byte 403s immediately and every time, so it cannot half-work.
+
+**The client still never talks to storage.** The adapter exposes no URL-minting
+method at all, and a test asserts the surface stays exactly `put`, `get`,
+`delete`, `sweep`, `name`. The absence is the control — you cannot leak what
+there is no function to produce. A credential scoped to a bucket of children's
+voices, shipped in a mobile app, is a credential in a decompiled APK, and no
+rotation un-leaks a child's voice.
+
+Three decisions worth stating:
+
+1. **Expiry is enforced on read, not left to the sweep.** A bucket lifecycle
+   rule runs when the provider feels like it; the sweep runs on a timer. Neither
+   is a guarantee at the moment somebody asks for a recording.
+2. **The sweep lists everything before deleting anything.** Deleting while
+   paginating means the listing changes under the cursor. AWS survives it
+   because its continuation token encodes the last key, but that is one
+   provider's property — an offset-based implementation would silently SKIP
+   objects, and a retention sweep that quietly misses a child's audio looks
+   exactly like a working one. Caught by a test.
+3. **A failure is never reported as an absence.** `get` returning undefined
+   means absent or expired. Returning it for a 500 would tell a caller a child's
+   audio no longer exists when the truth is that the store was unreachable.
+
+#### What is NOT verified
+
+**No bucket has ever been configured, and no request has ever reached a real S3
+endpoint.** The unit tests drive the adapter against a local HTTP server that
+behaves as S3 does on the four operations used, and deliberately do not verify
+the signature — that would be checking the implementation against itself.
+
+So the signing is **implemented and structurally tested, not proven conformant**.
+The first real deployment either works or 403s on the first voice turn; there is
+no middle state, but the first run against a real endpoint is a genuine
+verification step that has not happened. This stays NOT VERIFIED until it does.
+
+One bug found by `tsc` and missed by the tests, worth recording because it shows
+what the local server cannot catch: the adapter's audio-kind guard was
+hand-written with three values, none of which were the real two
+(`child_upload`, `companion_reply`). Every read would have reported a child's
+audio as absent, and every sweep would have deleted unexpired recordings as
+undatable. The runtime tests used the same wrong value and passed. The guard is
+now derived from the type, so changing it is a compile error.
 
 ### F-05 · Transcripts are never deleted · ~~**HIGH**~~ **RESOLVED**
 

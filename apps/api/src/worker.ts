@@ -138,18 +138,31 @@ const main = async (): Promise<void> => {
   ];
 
   /**
-   * The audio retention sweep is deliberately absent.
+   * The audio retention sweep, scheduled only when it can actually delete.
    *
-   * It is a privacy control and it is NOT safe to run here. The only audio
-   * storage implementation is in-memory, so the bytes live in whichever process
-   * wrote them; a sweep from this process would mark the ledger rows deleted
-   * while the objects survived in the API's heap. A retention record that
-   * asserts a deletion which did not happen is worse than no sweep, because it
-   * is the record someone would rely on.
+   * ═══════════════════════════════════════════════════════════════════════
+   * THIS IS THE SWEEP THAT USED TO BE IMPOSSIBLE.
+   * ═══════════════════════════════════════════════════════════════════════
    *
-   * Logged at warn on every boot rather than left as a silent omission.
+   * With the in-memory store the bytes live in whichever process wrote them, so
+   * a sweep from HERE would mark the ledger rows deleted while the objects
+   * survived in the API's heap. A retention record asserting a deletion that
+   * did not happen is worse than no sweep, because it is the record somebody
+   * would rely on — so the worker refused to schedule it and said so on every
+   * boot.
+   *
+   * A shared object store closes that gap: the DELETE is the deletion, and the
+   * ledger and the bytes agree. The refusal is kept for local and CI, where
+   * memory is still the right default and the warning is still the honest
+   * thing to say.
    */
-  if (!app.maintenance.audioSweepIsShared) {
+  if (app.maintenance.audioSweepIsShared) {
+    jobs.push({
+      name: 'privacy.expireAudio',
+      intervalMs: config.WORKER_AUDIO_SWEEP_INTERVAL_MS,
+      run: async () => await app.maintenance.sweepExpiredAudio(),
+    });
+  } else {
     log.warn(
       { control: 'audio_retention_backstop' },
       'audio retention sweep NOT scheduled: no shared object store is configured, ' +
