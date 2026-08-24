@@ -146,7 +146,7 @@ Enforced by an automated sweep, not by anyone remembering. Every value is driven
 | Data                  | Default                      | Configurable by parent                                 |
 | --------------------- | ---------------------------- | ------------------------------------------------------ |
 | Raw audio             | **0 days (immediate)**       | May opt **in** to retention; never opted in by default |
-| Transcripts           | 90 days                      | Yes — down to 0, up to 365                             |
+| Transcripts           | 90 days                      | Yes — down to 0, up to the operator ceiling            |
 | Learning progress     | Life of profile              | Deletable                                              |
 | Safety flags          | 365 days                     | No (parent can view; deletion would defeat oversight)  |
 | Analytics events      | 395 days                     | Opt-out entirely                                       |
@@ -154,7 +154,20 @@ Enforced by an automated sweep, not by anyone remembering. Every value is driven
 | Deleted-account grace | 30 days                      | No                                                     |
 | Backups               | Documented rotation, bounded | No                                                     |
 
-The retention sweep is monitored. A sweep that silently stops running is a privacy incident, and it alerts as one.
+**`RETENTION_TRANSCRIPT_DAYS` is a ceiling, not a target.** Where the operator
+policy and the parent's setting differ, the SHORTER one applies. A parent asking
+for seven days gets seven; a parent asking for 365 where the policy is 90 gets
+90, and is shown 90 rather than their own request read back to them.
+
+The words are **overwritten**, not flagged. The message row survives carrying
+only what was never content — role, position, timestamps, token counts — because
+safety flags cascade from it, and a retention setting must never become a way to
+erase the record that something was flagged. Every sweep writes one audit entry
+per child, carrying a count and nothing else, so the promise can be checked
+without the check itself holding anything.
+
+The retention sweep is monitored. A sweep that silently stops running is a
+privacy incident, and it alerts as one.
 
 ---
 

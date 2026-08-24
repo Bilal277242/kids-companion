@@ -97,6 +97,7 @@ import { createEscalationDelivery } from './safety-escalation.js';
 import { createAttemptCounter, createPolicyStore } from './safety-store.js';
 import { createStoreBilling } from './store-billing.js';
 import { createSubscriptionReconciler } from './subscription-reconciler.js';
+import { createTranscriptRetention } from './transcript-retention.js';
 import { createTurnHealthReporter } from './turn-health.js';
 
 export interface BuildAppOptions {
@@ -455,6 +456,20 @@ export const buildApp = async (options: BuildAppOptions) => {
    */
   /* The producer for three alert conditions that had none. */
   const turnHealth = createTurnHealthReporter(alertMonitor);
+
+  /* Transcript retention.
+   *
+   * `RETENTION_TRANSCRIPT_DAYS` and the per-child
+   * `parental_controls.transcript_retention_days` both existed and neither
+   * deleted anything. A retention control a parent can set, that does nothing,
+   * is a privacy promise the product does not keep — made to somebody who took
+   * it seriously enough to change it. */
+  const transcriptRetention = createTranscriptRetention({
+    db,
+    audit,
+    logger: app.log,
+    ceilingDays: config.RETENTION_TRANSCRIPT_DAYS,
+  });
 
   const alertTimer = setInterval(() => {
     alertMonitor.evaluate();
@@ -819,7 +834,15 @@ export const buildApp = async (options: BuildAppOptions) => {
   );
 
   await app.register(learningRoutes({ db }), { prefix: '/api' });
-  await app.register(parentDashboardRoutes({ db, audit, clock }), { prefix: '/api' });
+  await app.register(
+    parentDashboardRoutes({
+      db,
+      audit,
+      clock,
+      transcriptRetentionCeilingDays: config.RETENTION_TRANSCRIPT_DAYS,
+    }),
+    { prefix: '/api' },
+  );
 
   /**
    * ═══════════════════════════════════════════════════════════════════════════
@@ -862,6 +885,15 @@ export const buildApp = async (options: BuildAppOptions) => {
      */
     rebuildLearningRollups: async () => await learning.rebuildStale(),
 
+    /**
+     * Deletes transcripts past their retention.
+     *
+     * Unlike the audio sweep below, this one CAN run from another process:
+     * the content is in the database, not in a heap somewhere, so there is no
+     * risk of a ledger claiming a deletion that did not happen.
+     */
+    expireTranscripts: async () => await transcriptRetention.run(),
+
     /** Asks each rail about payments we never heard the outcome of. */
     reconcilePayments: async () => await paymentStore.reconcile(),
 
@@ -888,6 +920,7 @@ declare module 'fastify' {
     readonly maintenance: {
       retryEscalationDelivery(): Promise<{ attempted: number; delivered: number }>;
       rebuildLearningRollups(): Promise<{ days: number }>;
+      expireTranscripts(): Promise<{ children: number; messages: number }>;
       sweepExpiredSubscriptions(): Promise<number>;
       reconcilePayments(): Promise<{ checked: number; resolved: number; stillUnresolved: number }>;
       synchroniseStorePurchases(): Promise<{ checked: number; changed: number }>;

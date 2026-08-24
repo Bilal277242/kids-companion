@@ -71,7 +71,7 @@ by any code.** Several are the _only_ mechanism their category has.
 | `STORAGE_PROVIDER`                  | storage                | No object store                                       |
 | `OTEL_EXPORTER_OTLP_ENDPOINT`       | monitoring             | No tracing                                            |
 | `ENCRYPTION_ACTIVE_KEY_ID`          | database               | Key id is hard-coded `'placeholder'`                  |
-| `RETENTION_TRANSCRIPT_DAYS`         | privacy                | Transcripts are never deleted                         |
+| ~~`RETENTION_TRANSCRIPT_DAYS`~~     | privacy                | **RESOLVED** — a ceiling the sweep enforces (F-05)    |
 | `SAFETY_REVIEW_QUEUE_ENABLED`       | child safety           | No review queue                                       |
 | `REDIS_URL`                         | rate limits            | Readiness probe only; the limiter never touches Redis |
 
@@ -168,7 +168,7 @@ implementation; `STORAGE_PROVIDER` is never read. Three consequences:
   deletion that did not happen. The worker refuses to schedule it and logs why
   on every boot.
 
-### F-05 · Transcripts are never deleted · **HIGH**
+### F-05 · Transcripts are never deleted · ~~**HIGH**~~ **RESOLVED**
 
 **Category:** database, privacy. `RETENTION_TRANSCRIPT_DAYS` exists (30 in the
 staging template) and `parental_controls.transcript_retention_days` is a
@@ -180,6 +180,66 @@ Audio retention _is_ implemented (`app.expire_audio_artifacts`, wired through
 
 A retention control a parent can set, that does nothing, is worse than not
 offering it.
+
+#### Resolution
+
+`app.expire_transcripts`, swept hourly by the worker as
+`privacy.expireTranscripts`. The ciphertext is **overwritten in place** — not
+flagged, not soft-deleted — and the row survives.
+
+**Why the row survives, which was the real design question.**
+`content_flags.message_id` is `ON DELETE CASCADE`. Deleting message rows would
+take the safety flags with them, so a parent shortening retention to seven days
+would silently erase the record that anything was ever flagged about their
+child. A retention setting must not be a way to wipe safety history. The flag
+carries categories, severity and a decision and no content, so it is both safe
+to keep and worth keeping. `messages.status` already had a `redacted` value
+waiting, and `child_id` was already denormalised onto the row with a comment
+saying it existed "so the retention sweep can delete by child without a join at
+all" — this is the sweep that comment was written for.
+
+**The shorter of the two always wins.** `RETENTION_TRANSCRIPT_DAYS` is a
+ceiling, never a floor. A parent asking for seven days gets seven even where the
+operator policy is ninety; a parent asking for 365 is capped at the operator's
+number. Both directions are tested. The parent is also now shown the retention
+that APPLIES rather than the one they requested — being quietly overruled is its
+own kind of dishonesty.
+
+**Retention of zero works, and does not cut a child off mid-sentence.** Zero is
+permitted by the column's CHECK and is the strongest setting a parent can pick,
+so it has to function or the most privacy-minded parent in the product is the
+one being misled. A message is only redacted once its conversation is over —
+ended, or started more than a day ago and still marked active, because a
+five-year-old does not end conversations and an abandoned session must not
+become a transcript kept for ever.
+
+**The deletion is provable.** One audit row per child per sweep
+(`privacy.transcript.redacted`) carrying a count and nothing else — an answer to
+"you said you delete after thirty days, did you?" that does not itself hold
+anything needing deletion.
+
+#### What this deliberately does not decide
+
+Whether a conversation carrying a **safety escalation** should outlive the
+parent's retention setting.
+
+The argument runs both ways and neither side is an engineering call. Deleting
+means a safeguarding case can lose the words it was about. Holding means the
+most sensitive data in the system is kept against the wishes of the family it
+belongs to — and when the disclosure concerns a parent, that parent is the one
+who sets the retention. That is the same question as Q-07 and belongs to the
+same child-protection and legal review.
+
+What is guaranteed meanwhile is that deletion never destroys the RECORD:
+`content_flags` and `safety_escalations` are both content-free and both survive
+untouched. The fact that something happened outlives the words.
+
+**Verification.** `tests/integration/transcript-retention.test.ts` — 15 tests
+that read the ciphertext back out of the column rather than trusting a return
+value, including that flags survive, that progress numbers survive, that a live
+conversation is untouched, that an abandoned one is not, and that a parent
+session cannot reach the redaction path (`authenticated` holds no UPDATE grant
+on `messages`).
 
 ### F-06 · No error tracking · ~~**MEDIUM**~~ **RESOLVED**
 

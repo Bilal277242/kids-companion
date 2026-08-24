@@ -55,6 +55,13 @@ export const AUDIT_ACTIONS = [
   'voice.turn.completed',
   'voice.audio.expired',
 
+  /* Privacy. The counterpart to the line above, for text: a deletion nobody can
+   * prove happened is not much of a guarantee. One row per child per sweep,
+   * carrying a COUNT and nothing else — this is the record that answers "you
+   * said you delete after thirty days, did you?" without itself holding
+   * anything that would need deleting. */
+  'privacy.transcript.redacted',
+
   // Practice.
   'practice.session.started',
 

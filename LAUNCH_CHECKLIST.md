@@ -13,8 +13,8 @@ executed. Nothing is marked PASS for existing.
 
 |                  | Count |
 | ---------------- | ----: |
-| **PASS**         |    22 |
-| **FAIL**         |     7 |
+| **PASS**         |    23 |
+| **FAIL**         |     6 |
 | **NOT VERIFIED** |    17 |
 
 **Not one item in Infrastructure or Mobile passes.** No container has been
@@ -236,7 +236,7 @@ the parental controls, which it currently does not fetch.
 | AI moderation     | **NOT VERIFIED** | implemented, tested. Both classifiers are **mocks**; the real provider has never moderated anything                                                                      |
 | Parental controls | **PASS**         | implemented, tested. Daily and session minutes, quiet hours, allowed days, character allowlist, pause — enforced server-side, not just rendered                          |
 | Consent           | **PASS**         | implemented, tested. Versioned, per-child, and enforced by **RLS** — a child without consent cannot have a conversation row created, whatever the application layer does |
-| Privacy           | **FAIL**         | Transcript retention is a control a parent can set that **deletes nothing**                                                                                              |
+| Privacy           | **PASS**         | implemented, tested, verified against the stored bytes. Transcript retention deletes, the shorter of parent and operator wins, and each sweep is audited                 |
 | Data deletion     | **NOT VERIFIED** | implemented, tested. Password re-entry, 30-day grace, cascade. Never executed against real data                                                                          |
 
 **Escalation delivery is the gap that matters most, and it is counted under
@@ -357,12 +357,12 @@ that need review before a first submission, not after a rejection.
 | Item              | Status   | Evidence level                                                                                                            |
 | ----------------- | -------- | ------------------------------------------------------------------------------------------------------------------------- |
 | Unit tests        | **PASS** | 812 tests. Verified — they run, and they have caught real defects                                                         |
-| Integration tests | **PASS** | 746 tests against the real app, real plugins, real SQL, real RLS                                                          |
+| Integration tests | **PASS** | 761 tests against the real app, real plugins, real SQL, real RLS                                                          |
 | E2E tests         | **FAIL** | **never executed.** 5 Vitest specs skip without Docker; 7 Playwright specs have never run — browsers were never installed |
 | Performance tests | **PASS** | implemented and executed. Ten scenarios, a concurrency ladder, p50/p95/p99, and they found two real defects               |
 | Security tests    | **PASS** | 49 tests, twelve named attacks, with positive controls so a passing suite cannot be passing against nothing               |
 
-**Current: 1,558 passing, 5 skipped, 0 failing.** Coverage 88.2% statements,
+**Current: 1,573 passing, 5 skipped, 0 failing.** Coverage 88.2% statements,
 90.4% lines, against a 70% floor.
 
 The honest caveat that applies to every row above: **integration tests run
@@ -386,7 +386,9 @@ configuration are not.
 4. **Object storage**, which also unblocks audio retention and multi-instance.
 5. **Distributed rate limiting**, without which every limit multiplies by the
    instance count — including the one that makes password guessing impractical.
-6. **Transcript retention**, or withdraw the control that claims it.
+6. ~~**Transcript retention**, or withdraw the control that claims it.~~
+   **RESOLVED** — the control now does what it says, and a parent is shown the
+   retention that applies rather than the one they asked for.
 7. ~~**An alert destination** that is not a log file.~~ **RESOLVED** — and the
    alerts themselves now have producers, which three of the five lacked.
 8. ~~**Stories** (P-02) — implement it or stop advertising it in the plan table.~~

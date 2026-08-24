@@ -278,21 +278,36 @@ Only 5xx responses are captured, deduplicated by fingerprint, and correlated to
 
 ## 6. The worker
 
-One process running six scheduled sweeps, five of which are enabled:
+One process running seven scheduled sweeps, six of which are enabled:
 
-| Sweep                            | Default interval | What it repairs                                               |
+| Sweep                            | Default interval | What it does                                                  |
 | -------------------------------- | ---------------- | ------------------------------------------------------------- |
 | `safety.retryEscalationDelivery` | 1 min            | **a disclosure that has not yet reached a human** — see below |
 | `learning.rebuildRollups`        | 5 min            | progress numbers for conversations nobody ended               |
 | `subscriptions.sweepExpired`     | 5 min            | stored status that has drifted from an elapsed period         |
 | `payments.reconcile`             | 5 min            | payments whose outcome we never heard                         |
+| `privacy.expireTranscripts`      | 60 min           | **deletes transcripts past their retention** — see below      |
 | `storeBilling.synchronise`       | 60 min           | store purchases whose state moved without a notification      |
 | audio retention backstop         | —                | **not scheduled — see §9.1**                                  |
 
-The first one is not like the others and is deliberately on the shortest
-interval: every other sweep repairs a number that is stale, that one repairs a
-child whose disclosure could not be routed when it happened. If the worker is
-not running, nothing retries it.
+**Two of these are not backstops, and the worker not running is a real problem
+for both.**
+
+`safety.retryEscalationDelivery` is on the shortest interval because it repairs
+a child whose disclosure could not be routed when it happened. If the worker is
+down, nothing retries it.
+
+`privacy.expireTranscripts` is the only thing that deletes a transcript. If the
+worker is down, retention silently stops — data is kept past what a parent was
+promised, and nothing else in the system notices. Unlike the audio sweep it CAN
+run from this process: the content is in the database, so the statement that
+overwrites it IS the deletion, with no gap in which a ledger could claim a
+deletion that did not happen.
+
+`RETENTION_TRANSCRIPT_DAYS` is a **ceiling** on the per-child setting, never a
+floor — where they differ the shorter wins. Each sweep writes one audit row per
+child (`privacy.transcript.redacted`) carrying a count, so the promise is
+checkable. See [PRIVACY.md](PRIVACY.md).
 
 The rest are backstops, not the primary path. Entitlement is derived from
 timestamps on read, so a subscription is expired the moment its window closes

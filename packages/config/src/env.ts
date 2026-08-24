@@ -164,6 +164,15 @@ const dataSchema = z.object({
    * and nothing worse.
    */
   WORKER_LEARNING_ROLLUP_INTERVAL_MS: intFromEnv({ min: 10_000 }).default(300_000),
+
+  /**
+   * How often transcripts past their retention are deleted.
+   *
+   * Hourly. Retention is expressed in days, so a shorter interval buys nothing
+   * except load — and a longer one means a parent who sets retention to zero
+   * watches their child's words sit there for the rest of the day.
+   */
+  WORKER_TRANSCRIPT_RETENTION_INTERVAL_MS: intFromEnv({ min: 60_000 }).default(3_600_000),
 });
 
 const authSchema = z.object({

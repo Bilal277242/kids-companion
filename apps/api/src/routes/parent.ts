@@ -35,6 +35,13 @@ export interface ParentRoutesOptions {
   readonly db: Database;
   readonly audit: AuditLogger;
   readonly clock: Clock;
+  /**
+   * The operator retention ceiling, in days.
+   *
+   * Needed here so a parent is shown the retention that APPLIES rather than the
+   * one they asked for. The two differ whenever the operator policy is shorter.
+   */
+  readonly transcriptRetentionCeilingDays: number;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -54,6 +61,23 @@ const controlsSchema = z.object({
   languageLock: z.string().nullable(),
   contentFilterLevel: z.enum(['standard', 'strict']),
   transcriptRetentionDays: z.number().int(),
+  /**
+   * What retention is doing, rather than what was asked for.
+   *
+   * `effectiveDays` is the number that APPLIES — the shorter of this setting
+   * and the operator ceiling. A parent who asks for 365 where the operator
+   * policy is 90 should be told 90, not shown their own request back and
+   * quietly given something else.
+   *
+   * The counts are how a parent checks the promise was kept. Counts only: an
+   * answer to "what do you still have?" must not itself be a copy of it.
+   */
+  transcriptRetention: z.object({
+    effectiveDays: z.number().int(),
+    heldMessages: z.number().int(),
+    deletedMessages: z.number().int(),
+    oldestHeldAt: z.string().nullable(),
+  }),
   isPaused: z.boolean(),
   notifications: z.object({
     onSafetyFlag: z.boolean(),
@@ -150,7 +174,7 @@ const ACTIVITY_COLUMNS = `conversation_seconds, conversation_turns, conversation
         words_used, new_vocabulary, stories_completed, exercises_completed,
         pronunciation_score_sum, pronunciation_score_count`;
 
-const loadControlsRow = async (tx: Queryable, childId: string) => {
+const loadControlsRow = async (tx: Queryable, childId: string, ceilingDays: number) => {
   const { rows } = await tx.query<{
     daily_minute_limit: number;
     session_minute_limit: number;
@@ -180,7 +204,31 @@ const loadControlsRow = async (tx: Queryable, childId: string) => {
   const row = rows[0];
   if (!row) throw notFound();
 
+  /* Both come from the database rather than being computed here, so the number
+   * a parent is shown is the same one the sweep acts on. Two implementations of
+   * "the shorter of the two" would eventually disagree, and the one the parent
+   * could see would be the wrong one. */
+  const { rows: retention } = await tx.query<{
+    effective_days: number;
+    held: number;
+    redacted: number;
+    oldest_held: string | null;
+  }>(
+    `select app.effective_transcript_retention_days($1, $2) as effective_days,
+            s.held, s.redacted, s.oldest_held
+       from app.transcript_retention_status($1) s`,
+    [childId, ceilingDays],
+  );
+
+  const status = retention[0];
+
   return {
+    transcriptRetention: {
+      effectiveDays: status?.effective_days ?? row.transcript_retention_days,
+      heldMessages: status?.held ?? 0,
+      deletedMessages: status?.redacted ?? 0,
+      oldestHeldAt: status?.oldest_held == null ? null : new Date(status.oldest_held).toISOString(),
+    },
     dailyMinuteLimit: row.daily_minute_limit,
     sessionMinuteLimit: row.session_minute_limit,
     quietHoursStart: row.quiet_hours_start,
@@ -283,7 +331,11 @@ export const parentRoutes =
             [childId],
           );
 
-          const controls = await loadControlsRow(tx, childId);
+          const controls = await loadControlsRow(
+            tx,
+            childId,
+            options.transcriptRetentionCeilingDays,
+          );
           const gateInputs = await loadParentalControls(tx, childId);
           const gate = evaluateParentalGate({ controls: gateInputs, clock: options.clock });
 
@@ -507,7 +559,11 @@ export const parentRoutes =
         const updated = await app.withParent(request, async (tx) => {
           await requireChildOwnership(tx, childId);
 
-          const current = await loadControlsRow(tx, childId);
+          const current = await loadControlsRow(
+            tx,
+            childId,
+            options.transcriptRetentionCeilingDays,
+          );
 
           const next = {
             dailyMinuteLimit: body.dailyMinuteLimit ?? current.dailyMinuteLimit,
@@ -571,7 +627,7 @@ export const parentRoutes =
             ],
           );
 
-          return await loadControlsRow(tx, childId);
+          return await loadControlsRow(tx, childId, options.transcriptRetentionCeilingDays);
         });
 
         // Changing what a child may do is a sensitive administrative action, and

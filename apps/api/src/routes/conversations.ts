@@ -132,6 +132,8 @@ const messageSchema = z.object({
   sequence: z.number().int(),
   text: z.string(),
   status: z.enum(['delivered', 'blocked', 'redacted']),
+  /** When retention deleted the words. Null while the transcript is still held. */
+  redactedAt: z.string().nullable(),
   createdAt: z.string(),
 });
 
@@ -1332,9 +1334,10 @@ export const conversationRoutes =
             sequence: number;
             content_ciphertext: Buffer | string;
             status: 'delivered' | 'blocked' | 'redacted';
+            redacted_at: string | null;
             created_at: string;
           }>(
-            `select id, role, sequence, content_ciphertext, status, created_at
+            `select id, role, sequence, content_ciphertext, status, redacted_at, created_at
                from messages where conversation_id = $1 order by sequence`,
             [request.params.conversationId],
           );
@@ -1348,8 +1351,16 @@ export const conversationRoutes =
             id: m.id,
             role: m.role,
             sequence: m.sequence,
-            text: substituteName(decodeContent(m.content_ciphertext), result.childName),
+            /* A redacted message returns an empty string, not the empty
+             * ciphertext decoded into one by accident. The distinction matters
+             * to whoever renders this: "" reads as a bug, and `redactedAt`
+             * with it reads as the retention policy doing what it promised. */
+            text:
+              m.redacted_at === null
+                ? substituteName(decodeContent(m.content_ciphertext), result.childName)
+                : '',
             status: m.status,
+            redactedAt: m.redacted_at === null ? null : new Date(m.redacted_at).toISOString(),
             createdAt: new Date(m.created_at).toISOString(),
           })),
         });

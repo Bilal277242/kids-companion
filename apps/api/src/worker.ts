@@ -113,6 +113,19 @@ const main = async (): Promise<void> => {
       run: async () => await app.maintenance.rebuildLearningRollups(),
     },
     {
+      /**
+       * A privacy control, and one that CAN safely run here.
+       *
+       * The audio sweep below cannot, because the bytes live in the API's heap
+       * and a ledger claiming a deletion that did not happen is worse than no
+       * sweep. Transcripts are in the database, so there is no such gap: the
+       * statement that overwrites the content IS the deletion.
+       */
+      name: 'privacy.expireTranscripts',
+      intervalMs: config.WORKER_TRANSCRIPT_RETENTION_INTERVAL_MS,
+      run: async () => await app.maintenance.expireTranscripts(),
+    },
+    {
       name: 'payments.reconcile',
       intervalMs: config.WORKER_PAYMENT_RECONCILE_INTERVAL_MS,
       run: async () => await app.maintenance.reconcilePayments(),
