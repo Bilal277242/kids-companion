@@ -276,8 +276,19 @@ rollback:
 
 1. Stop the deployment. Leave the application on whatever version is running.
 2. Confirm the damage from `db:status` and the migration in question.
-3. Restore point-in-time recovery to a timestamp before the migration.
-4. Write a forward migration that reaches the intended state correctly.
+3. Restore — either provider point-in-time recovery to a timestamp before the
+   migration, or the most recent dump via `infra/scripts/restore.sh`. The script
+   verifies the dump before touching anything and refuses a production target
+   without an explicit acknowledgement, because the realistic accident here is
+   somebody restoring with the wrong URL in their shell at 3 a.m.
+4. Confirm the RLS policy count came back. A restore missing them serves traffic
+   with no tenant isolation and looks like a success — the script checks, and so
+   should you.
+5. Write a forward migration that reaches the intended state correctly.
+
+> This procedure's one prerequisite used to not exist. The scripts and a weekly
+> automated drill are now in place, **but the drill has never run** — see
+> DEPLOYMENT.md §10.3 before relying on this.
 
 ### 8.3 Order
 
@@ -286,7 +297,7 @@ rollback:
 | Bad code, schema fine                  | Redeploy the previous SHA. Nothing else.                                                                    |
 | Bad migration, backward-compatible     | Redeploy the previous SHA; write a forward fix.                                                             |
 | Bad migration, not backward-compatible | Roll **forward** with a fix. Rolling the app back would run the old version against a schema it cannot use. |
-| Data destroyed                         | §8.2, restore from backup, accept the loss window.                                                          |
+| Data destroyed                         | §8.2, restore from backup (`infra/scripts/restore.sh`; see DEPLOYMENT.md §10.3), accept the loss window.    |
 
 The third row is the one that catches people. If the schema has already moved
 past what the previous version can read, going backwards makes it worse.

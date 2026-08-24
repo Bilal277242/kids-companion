@@ -14,8 +14,8 @@ executed. Nothing is marked PASS for existing.
 |                  | Count |
 | ---------------- | ----: |
 | **PASS**         |    23 |
-| **FAIL**         |     5 |
-| **NOT VERIFIED** |    18 |
+| **FAIL**         |     4 |
+| **NOT VERIFIED** |    19 |
 
 **Not one item in Infrastructure or Mobile passes.** No container has been
 built, no environment has ever run, no build has been produced for either
@@ -290,7 +290,7 @@ unproven against a real vendor.
 | ---------------------- | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Production environment | **FAIL**         | does not exist. No host, no domain, no certificate, no orchestrator — **external config**                                                                                    |
 | Database               | **NOT VERIFIED** | implemented, tested. Migrations forward-only with a checksum ledger, applied to real PostgreSQL 17 in CI. No production instance exists — **external config**                |
-| Backups                | **FAIL**         | nothing. No schedule, no retention policy, no restore ever performed — **external config**                                                                                   |
+| Backups                | **NOT VERIFIED** | implemented: encrypted dumps, verification, restore guards, and a weekly automated restore drill. **None of it has ever run** — no database exists to back up                |
 | Monitoring             | **FAIL**         | metrics implemented and tested; **no external system receives them**. `OTEL_EXPORTER_OTLP_ENDPOINT` is declared and unread                                                   |
 | Logging                | **PASS**         | implemented, tested. Redaction at 100% of lines and branches, request ids, no internals in responses                                                                         |
 | Alerts                 | **PASS**         | five conditions, each with a producer, delivered to a configured destination and verified against a real HTTP server. Production refuses to boot without one (I-01 resolved) |
@@ -356,13 +356,13 @@ that need review before a first submission, not after a rejection.
 
 | Item              | Status   | Evidence level                                                                                                            |
 | ----------------- | -------- | ------------------------------------------------------------------------------------------------------------------------- |
-| Unit tests        | **PASS** | 875 tests. Verified — they run, and they have caught real defects                                                         |
+| Unit tests        | **PASS** | 886 tests. Verified — they run, and they have caught real defects                                                         |
 | Integration tests | **PASS** | 765 tests against the real app, real plugins, real SQL, real RLS                                                          |
 | E2E tests         | **FAIL** | **never executed.** 5 Vitest specs skip without Docker; 7 Playwright specs have never run — browsers were never installed |
 | Performance tests | **PASS** | implemented and executed. Ten scenarios, a concurrency ladder, p50/p95/p99, and they found two real defects               |
 | Security tests    | **PASS** | 49 tests, twelve named attacks, with positive controls so a passing suite cannot be passing against nothing               |
 
-**Current: 1,640 passing, 5 skipped, 0 failing.** Coverage 88.2% statements,
+**Current: 1,651 passing, 5 skipped, 0 failing.** Coverage 88.2% statements,
 90.4% lines, against a 70% floor.
 
 The honest caveat that applies to every row above: **integration tests run
@@ -382,7 +382,9 @@ configuration are not.
 2. ~~**Learning events** (P-01). The parent dashboard is a core promise and it
    shows zeros.~~ **RESOLVED** — talking to the companion now moves the numbers,
    proven through the HTTP API rather than by seeding the tables.
-3. **Backups**, configured _and_ a restore performed.
+3. **Backups** — the scripts and an automated weekly restore drill now exist;
+   what remains is **running the drill once**, which needs a database rather
+   than more code.
 4. ~~**Object storage**, which also unblocks audio retention and multi-instance.~~
    **IMPLEMENTED, NOT VERIFIED** — the adapter and the audio retention sweep are
    real; no request has ever reached a real bucket. Verifying that is a

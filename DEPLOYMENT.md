@@ -533,9 +533,10 @@ into a route, so it can be lowered during an incident without a release.
 
 ## 10. Production
 
-> **Do not deploy to production.** §9 lists two blockers, neither of which is a
-> setting. This section documents the target so the gap is legible — it is not a
-> runbook for a deploy that should happen now.
+> **Do not deploy to production.** §9's blockers are resolved in code, but
+> nothing here has been exercised against real infrastructure. This section
+> documents the target so the gap is legible — it is not a runbook for a deploy
+> that should happen now.
 
 ### Topology
 
@@ -579,6 +580,79 @@ Redeploy the previous image tag. **Migrations are forward-only and are not
 rolled back** — this is why every migration must be compatible with the version
 before it. A migration that cannot be rolled forward past needs a new migration,
 not a reversal.
+
+---
+
+### 10.3 Backups, and the drill that makes them real
+
+**An untested backup is not a backup.** The failure to design against is not a
+backup that never ran — it is one that ran nightly for eighteen months, exited 0
+every time, and produced a file that stops halfway through the schema.
+
+| Piece                                | What it does                                              |
+| ------------------------------------ | --------------------------------------------------------- |
+| `infra/scripts/backup.sh`            | dumps, **verifies, then encrypts**; prunes local copies   |
+| `infra/scripts/verify-backup.mjs`    | decides whether a dump is worth keeping                   |
+| `infra/scripts/restore.sh`           | restores, with guards against the target being production |
+| `.github/workflows/backup-drill.yml` | dumps and restores real Postgres weekly, and checks it    |
+
+#### What a dump of this database is
+
+Every conversation every child has had, their names, their ages, and their
+parents' contact details. Message content sits in `content_ciphertext`, but the
+codec is still `placeholder` (§9.3) — **treat the dump as plaintext**.
+
+`backup.sh` therefore **refuses to run without `BACKUP_ENCRYPT_CMD`**. Not a
+warning: a warning in an unattended nightly job is read by nobody, and the result
+would be a directory of children's conversations in the clear, retained for a
+week, on a host chosen for having disk space. Server-side encryption at the
+destination is not a substitute, because the file exists on local disk first —
+and the script deletes the plaintext on every exit path, including failure.
+
+#### The check that matters most
+
+A restore that comes back **without the RLS policies**.
+
+Every table is `ENABLE` plus `FORCE` row-level security, and 85 policies are what
+stop one family reading another's conversations. A dump missing them restores
+into a database that starts, serves traffic, passes a smoke test — and has no
+tenant isolation at all. That is a total confidentiality failure that looks
+exactly like a successful recovery.
+
+So the policies are counted in the dump before it is kept, counted again in the
+target after a restore, and the drill compares both against the source. `ENABLE`
+without `FORCE` is checked separately: without `FORCE`, the table owner — which
+is the role the application connects as — bypasses every policy.
+
+#### The drill
+
+Weekly, and on any change to the machinery itself, `backup-drill.yml` builds a
+Postgres from the migrations, puts a row in it, runs the real `backup.sh` with
+real encryption, restores into a **second** database with the real `restore.sh`,
+and then asserts:
+
+- table count, policy count and row count match the source exactly;
+- no restored table enables RLS without forcing it;
+- the migration ledger came back, so the next deploy does not replay everything;
+- no plaintext dump was left on disk.
+
+Running it by hand is `workflow_dispatch`. Restoring **production** needs
+`I_UNDERSTAND_THIS_OVERWRITES_PRODUCTION=yes-restore-production`, because the
+realistic accident is not carelessness — it is somebody restoring into staging
+at 3 a.m. during an incident with production's URL still in their shell.
+
+#### Managed Postgres is not exempt
+
+Point-in-time recovery from the provider covers a different failure — the host
+dying — and not this one: a bad migration, a bad deploy, or an account being
+closed. Enable PITR **and** take these dumps; they are independent of the
+provider and restorable somewhere else.
+
+> **NOT YET VERIFIED.** The scripts have never been run: this machine has no
+> Postgres, and no production database exists to back up. The drill is a real
+> mechanism rather than a written procedure, but until it has run green once,
+> "a restore has been performed" is still false. Running it is one
+> `workflow_dispatch` click, and it is the step that closes F-02 properly.
 
 ---
 

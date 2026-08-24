@@ -13,7 +13,7 @@ because the first reading was wrong.
 
 # NOT READY FOR PRODUCTION
 
-**9 PASS · 5 PARTIAL · 3 FAIL** — of seventeen categories.
+**9 PASS · 6 PARTIAL · 2 FAIL** — of seventeen categories.
 
 This is not a close call, and the reason is not the count. One finding is a
 child-safety gap rather than an infrastructure one:
@@ -24,10 +24,12 @@ child-safety gap rather than an infrastructure one:
 > the worker until it lands. **Who that endpoint belongs to remains Q-07 and
 > still blocks launch** — the mechanism exists, the protocol does not. See F-01.
 
-Nothing here should be read as "close, pending sign-off". The remaining failures
-(backups, domain, and the two below them) are infrastructure that does not exist
-yet rather than code. Storage sits at PARTIAL on purpose: the code is real and
-tested, and no request has ever reached a real bucket.
+Nothing here should be read as "close, pending sign-off", and the shift from
+FAIL to PARTIAL across several rows is the point rather than the progress: those
+categories now have tested mechanisms and **no evidence they work against real
+infrastructure**. Storage has never reached a bucket, the limiter has never
+counted against a real Redis, and the backup drill has never run. Standing up
+staging once is what converts most of this column; writing more code does not.
 
 Verdicts marked RESOLVED were fixed after this review. The original finding is
 kept verbatim in each case, because what a readiness review said before the fix
@@ -43,7 +45,7 @@ is the part worth being able to read again.
 | 2   | Secrets                   | **PASS**    | Nothing in any image or layer; scanned in CI, history included                                       |
 | 3   | Database                  | **PASS**    | Forward-only migrations, checksum ledger, pool + timeout + TLS enforced                              |
 | 4   | RLS                       | **PARTIAL** | All 50 tables `ENABLE`+`FORCE`, proven from the catalogue; 85 policies not each behaviourally tested |
-| 5   | Backups                   | **FAIL**    | None. No script, no schedule, no restore drill                                                       |
+| 5   | Backups                   | **PARTIAL** | Scripts, schedule and an automated restore drill exist; none has ever run (F-02)                     |
 | 6   | Monitoring                | **PASS**    | Alerts reach a configured destination; production refuses to boot without one (F-07 resolved)        |
 | 7   | Logging                   | **PASS**    | Redaction at 100 % coverage, request ids, no internals in responses                                  |
 | 8   | Rate limits               | **PASS**    | Counted in Redis; falls back to per-instance rather than open or closed (F-03)                       |
@@ -128,7 +130,7 @@ They are not — detection works, delivery does not.
 schema that escalation is audit-only. Do not ship a children's product where a
 disclosure depends on someone reading logs.
 
-### F-02 · No backups · **CRITICAL**
+### F-02 · No backups · ~~**CRITICAL**~~ **MECHANISM BUILT · NOT YET RUN**
 
 **Category:** backups. No backup script, no schedule, no retention policy, no
 restore procedure, and no restore ever performed. `DEPLOYMENT.md` §10 assumes
@@ -141,6 +143,49 @@ option — a documented procedure whose one prerequisite does not exist.
 
 **An untested backup is not a backup.** Configure it, then restore from it into
 a scratch database and confirm the data is there.
+
+#### Resolution
+
+Four pieces, and the last one is the point:
+
+- `infra/scripts/backup.sh` — dumps, **verifies, then encrypts**. It refuses to
+  run without `BACKUP_ENCRYPT_CMD`, because a dump of this database is every
+  child's conversations and the alternative is a nightly job quietly writing them
+  in the clear. The plaintext is deleted on every exit path.
+- `infra/scripts/verify-backup.mjs` — decides whether a dump is worth keeping,
+  and runs BEFORE encryption, because once encrypted a truncated file cannot be
+  told from a good one.
+- `infra/scripts/restore.sh` — a data-destruction tool pointed the other way, so
+  it verifies the dump before touching the target, names the target without its
+  password, and refuses anything that looks like production without an explicit
+  acknowledgement.
+- `.github/workflows/backup-drill.yml` — **dumps and restores real Postgres every
+  week**, then compares table, policy and row counts against the source.
+
+#### The failure this is built around
+
+A restore that comes back without the RLS policies. Every table is `ENABLE` plus
+`FORCE` and 85 policies are what separate one family's conversations from
+another's; a dump missing them restores into a database that starts, serves
+traffic, and has no tenant isolation. It looks exactly like a successful
+recovery.
+
+The policies are therefore counted in the file before it is kept, counted in the
+target after the restore, and compared to the source by the drill. `ENABLE`
+without `FORCE` is checked separately, since without `FORCE` the application's
+own role bypasses every policy.
+
+#### Still NOT VERIFIED, and why the verdict stays short of PASS
+
+**None of this has ever run.** There is no Postgres on the machine it was written
+on and no production database to back up. The verification logic is unit-tested
+against synthetic dumps — including a truncated one, one with no policies, and
+one where `FORCE` is missing — but the scripts themselves have not executed.
+
+The drill is a real mechanism rather than a written procedure, which is the
+difference between this and the original finding. It is still not a restore that
+has happened. One `workflow_dispatch` run closes that, and until then the honest
+status is a category that has a tested design and no evidence.
 
 ### F-03 · Rate limits are per-instance · ~~**HIGH**~~ **RESOLVED**
 
@@ -617,7 +662,7 @@ denying camera, microphone, and geolocation.
 - **The case people get wrong:** if the schema has moved past what the previous
   version can read, rolling the application back makes it worse. Roll forward.
 
-Never exercised. Its backup fallback does not exist (F-02).
+Never exercised. Its backup fallback now exists but has never been run (F-02).
 
 ---
 
@@ -661,7 +706,7 @@ cost per turn) with no cap on signups.
 
 1. **F-01** — escalation delivery. A children's product where a disclosure
    reaches no human should not launch.
-2. **F-02** — backups configured _and_ a restore performed.
+2. **F-02** — backups configured _and_ a restore performed. The mechanism now exists; **running the drill once** is what remains.
 3. **F-04** — object storage, which also unblocks audio retention and
    multi-instance.
 4. **F-03** — Redis-backed rate limiting, which also unblocks multi-instance.

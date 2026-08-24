@@ -24,6 +24,10 @@ export default defineConfig({
           include: [
             '{packages,services,apps}/**/*.test.ts',
             '{packages,services,apps}/**/*.test.tsx',
+            // The operational scripts. They are the least-exercised code in the
+            // repository and the most consequential when wrong — the backup
+            // verifier decides whether a dump is trusted.
+            'infra/scripts/**/*.test.mjs',
           ],
           exclude: ['**/node_modules/**', '**/dist/**', '**/*.integration.test.ts'],
           environment: 'node',

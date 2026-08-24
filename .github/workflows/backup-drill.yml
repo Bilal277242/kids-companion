@@ -1,0 +1,207 @@
+name: Backup drill
+
+# ═══════════════════════════════════════════════════════════════════════════
+# AN UNTESTED BACKUP IS NOT A BACKUP
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# The production readiness review put it plainly: "Configure it, then restore
+# from it into a scratch database and confirm the data is there." A written
+# procedure does not satisfy that. A procedure that runs every week does.
+#
+# This dumps a real Postgres, restores into a SECOND real Postgres, and checks
+# what came back — the row counts, and the RLS policies without which a restore
+# comes back serving traffic with no tenant isolation.
+#
+# It runs against CI databases, never against production. Restoring production
+# is a decision with a person's name on it (infra/scripts/restore.sh).
+
+on:
+  schedule:
+    # Weekly. Frequent enough that a break is found in days rather than at the
+    # moment it is needed, rare enough that nobody starts ignoring it.
+    - cron: "0 4 * * 1"
+  workflow_dispatch:
+  pull_request:
+    # Also on any change to the machinery itself, because the drill breaking
+    # silently is the same failure as the backup breaking silently.
+    paths:
+      - "infra/scripts/backup.sh"
+      - "infra/scripts/restore.sh"
+      - "infra/scripts/verify-backup.mjs"
+      - "infra/migrations/**"
+      - ".github/workflows/backup-drill.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  drill:
+    name: Dump, restore, verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          # Not a secret. A throwaway credential for a container that lives for
+          # the length of one job and is reachable only from it.
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: kids_companion_source
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/kids_companion_source
+      RESTORE_TARGET_URL: postgresql://postgres:postgres@localhost:5432/kids_companion_restored
+      BACKUP_DIR: ${{ github.workspace }}/.backup-drill
+
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      # ═══════════════════════════════════════════════════════════════════════
+      # The client must match the server, or pg_dump refuses outright
+      # ═══════════════════════════════════════════════════════════════════════
+      # The runner image ships the PostgreSQL 16 client and the service above is
+      # 17. `pg_dump` will not dump a server newer than itself — it errors with a
+      # version mismatch rather than producing anything — so this drill would
+      # have failed on its first run without this step.
+      - name: Install the PostgreSQL 17 client
+        run: |
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc             https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc]             https://apt.postgresql.org/pub/repos/apt             $(lsb_release -cs)-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client-17
+          pg_dump --version
+          psql --version
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build the source database
+        run: pnpm db:migrate
+
+      # Data, so the drill proves rows survive rather than only schema. Written
+      # through SQL rather than the API because the point is the dump and the
+      # restore, not the application.
+      - name: Put something in it
+        run: |
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
+            insert into parents (email, display_name, password_hash, status)
+            values ('drill@example.invalid', 'Drill Parent', 'not-a-real-hash', 'active');
+          SQL
+
+      - name: Record what should come back
+        id: before
+        run: |
+          counts=$(psql "$DATABASE_URL" -tA -F' ' -c "
+            select
+              (select count(*) from pg_tables where schemaname = 'public'),
+              (select count(*) from pg_policies where schemaname = 'public'),
+              (select count(*) from parents);
+          ")
+          read -r tables policies parents <<<"$counts"
+          echo "tables=$tables"     >> "$GITHUB_OUTPUT"
+          echo "policies=$policies" >> "$GITHUB_OUTPUT"
+          echo "parents=$parents"   >> "$GITHUB_OUTPUT"
+          echo "Source: $tables tables, $policies policies, $parents parents"
+
+      # A real encryption step, so the drill exercises the path production uses
+      # rather than a shortcut past it. The key is generated here and thrown
+      # away with the runner — it protects nothing real.
+      - name: Back up, encrypted, exactly as production would
+        run: |
+          openssl rand -base64 32 > "$RUNNER_TEMP/drill.key"
+          chmod 600 "$RUNNER_TEMP/drill.key"
+          export BACKUP_ENCRYPT_CMD="openssl enc -aes-256-cbc -pbkdf2 -salt -pass file:$RUNNER_TEMP/drill.key"
+          bash infra/scripts/backup.sh
+
+      - name: The plaintext dump must not have survived
+        run: |
+          # backup.sh removes it on every exit path. If one is ever left behind,
+          # a host running nightly backups accumulates children's conversations
+          # in the clear.
+          if compgen -G "$BACKUP_DIR/*.sql" > /dev/null; then
+            echo "::error::A plaintext dump was left on disk."
+            exit 1
+          fi
+          ls -l "$BACKUP_DIR"
+
+      - name: Create the scratch target
+        run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c 'create database kids_companion_restored;'
+
+      - name: Decrypt and restore
+        env:
+          RESTORE_NON_INTERACTIVE: "yes"
+        run: |
+          encrypted=$(ls "$BACKUP_DIR"/*.sql.enc | head -1)
+          openssl enc -d -aes-256-cbc -pbkdf2 -pass "file:$RUNNER_TEMP/drill.key" \
+            -in "$encrypted" -out "$RUNNER_TEMP/restored.sql"
+          bash infra/scripts/restore.sh "$RUNNER_TEMP/restored.sql"
+
+      # ═══════════════════════════════════════════════════════════════════════
+      # The assertions that make this a drill rather than a smoke test
+      # ═══════════════════════════════════════════════════════════════════════
+      - name: The restored database matches the source
+        run: |
+          counts=$(psql "$RESTORE_TARGET_URL" -tA -F' ' -c "
+            select
+              (select count(*) from pg_tables where schemaname = 'public'),
+              (select count(*) from pg_policies where schemaname = 'public'),
+              (select count(*) from parents);
+          ")
+          read -r tables policies parents <<<"$counts"
+          echo "Restored: $tables tables, $policies policies, $parents parents"
+
+          fail=0
+          [ "$tables"   = "${{ steps.before.outputs.tables }}" ]   || { echo "::error::tables: ${{ steps.before.outputs.tables }} -> $tables"; fail=1; }
+          # The one that matters most. A restore missing its policies starts,
+          # serves traffic, and lets one family read another's conversations.
+          [ "$policies" = "${{ steps.before.outputs.policies }}" ] || { echo "::error::POLICIES: ${{ steps.before.outputs.policies }} -> $policies — a restore from this would have no tenant isolation"; fail=1; }
+          [ "$parents"  = "${{ steps.before.outputs.parents }}" ]  || { echo "::error::rows: ${{ steps.before.outputs.parents }} -> $parents"; fail=1; }
+          exit $fail
+
+      - name: RLS is still forced, not merely enabled
+        run: |
+          # ENABLE alone lets the table owner — the role the application
+          # connects as — bypass every policy. A restore that loses FORCE has
+          # policies that read correctly and enforce nothing.
+          unforced=$(psql "$RESTORE_TARGET_URL" -tA -c "
+            select count(*) from pg_class c
+              join pg_namespace n on n.oid = c.relnamespace
+             where n.nspname = 'public' and c.relkind = 'r'
+               and c.relrowsecurity and not c.relforcerowsecurity;
+          ")
+          if [ "$unforced" != "0" ]; then
+            echo "::error::$unforced restored tables enable RLS without forcing it."
+            exit 1
+          fi
+
+      - name: The migration runner knows where it is
+        run: |
+          # Without the ledger the next deploy replays every migration against a
+          # database that already has them.
+          pending=$(pnpm db:status 2>&1) || true
+          echo "$pending"
+          if echo "$pending" | grep -qiE 'pending|error'; then
+            echo "::error::The restored database is not at the expected migration state."
+            exit 1
+          fi
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/kids_companion_restored
+
+      - name: Nothing is left lying around
+        if: always()
+        run: rm -rf "$BACKUP_DIR" "$RUNNER_TEMP/drill.key" "$RUNNER_TEMP/restored.sql"
