@@ -252,6 +252,30 @@ what reaches them is not working. See [docs/OBSERVABILITY.md §6](docs/OBSERVABI
 
 ---
 
+## 5b. Error tracking
+
+`ERROR_TRACKING_PROVIDER` is **required in production** and must name a real
+destination — the API refuses to boot on `none`.
+
+| Variable                         | Default  | Notes                                 |
+| -------------------------------- | -------- | ------------------------------------- |
+| `ERROR_TRACKING_PROVIDER`        | `none`   | `none`, `sentry`, `webhook`           |
+| `SENTRY_DSN`                     | —        | required when provider is `sentry`    |
+| `ERROR_TRACKING_WEBHOOK_URL`     | —        | required when provider is `webhook`   |
+| `ERROR_TRACKING_TIMEOUT_MS`      | `5000`   | per attempt; errors are never retried |
+| `ERROR_TRACKING_RESEND_AFTER_MS` | `300000` | the gap between sends of the same bug |
+
+**There is no Sentry SDK in this repository, and adding one would be a privacy
+regression.** Its default integrations capture request bodies and headers, and
+the request body on the busiest route here is a child speaking. The envelope is
+written by hand so nothing can attach anything unchosen. See
+[docs/OBSERVABILITY.md §7](docs/OBSERVABILITY.md).
+
+Only 5xx responses are captured, deduplicated by fingerprint, and correlated to
+`SERVICE_VERSION`. The aggregate is on `GET /api/admin/health/detailed`.
+
+---
+
 ## 6. The worker
 
 One process running six scheduled sweeps, five of which are enabled:

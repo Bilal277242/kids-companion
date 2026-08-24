@@ -195,7 +195,79 @@ per process and then went silent for good.
 
 ---
 
-## 7. Product metrics
+## 7. Error tracking
+
+`ERROR_TRACKING_PROVIDER` is **required in production** and must not be `none`.
+Three values: `none` (aggregate in process, send nothing), `sentry` (needs
+`SENTRY_DSN`), `webhook` (needs `ERROR_TRACKING_WEBHOOK_URL`). A provider named
+without its destination is refused at boot in every environment.
+
+### 7.1 There is no Sentry SDK, on purpose
+
+**This is the most important thing on this page.**
+
+An error tracker's default integrations exist to capture as much surrounding
+context as they can: request bodies, headers, cookies, query strings,
+breadcrumbs, sometimes local variables. That is a good default for most products
+and a catastrophic one here, because **the request body on the busiest route in
+this application is a child speaking**.
+
+So the Sentry envelope is written by hand, the same way `probeRedis` speaks RESP
+without a Redis client. Every field on the event is placed there deliberately,
+which is what makes the privacy assertion testable rather than aspirational.
+
+| Sent                                  | Never sent                                       |
+| ------------------------------------- | ------------------------------------------------ |
+| error type, scrubbed message          | the request body, query string, headers, cookies |
+| our own stack frames, basenames only  | the child's utterance or the model's reply       |
+| the route **pattern**, method, status | any child, parent, or conversation id            |
+| release, environment, counts          | any name                                         |
+
+### 7.2 Scrubbing
+
+Our own `AppError` messages are fixed strings and safe by construction. The
+dangerous ones are the errors we did not write — a driver quoting the row it
+choked on, a validator echoing the value it rejected, a provider returning the
+prompt inside its complaint. Any of those can contain a child's words.
+
+So a message is stripped of quoted strings, emails, uuids, long tokens and
+numbers, then capped at 200 characters. A message that loses its meaning to that
+was carrying data, which is the trade we want.
+
+### 7.3 Grouping and volume
+
+The fingerprint is `type | scrubbed message | innermost own frame`. Scrubbing is
+what makes it work as deduplication: "row 41" and "row 87" are one bug. The same
+message thrown from two different places stays two bugs.
+
+The first occurrence of a fingerprint is sent immediately. After that the same
+fingerprint is sent at most once per `ERROR_TRACKING_RESEND_AFTER_MS` (5 min),
+with its count — a failure repeating a thousand times a minute is still one bug,
+and forwarding each occurrence turns our incident into the tracker's incident.
+
+**Only 5xx is captured.** A 400 is a caller's mistake, a 429 is a limit working,
+a 404 is a client asking for something absent. None is a bug in this
+application, and anyone able to send a malformed body could otherwise fill the
+tracker on demand.
+
+### 7.4 A new error type does not page
+
+The readiness review asked for an alert on a new error type. There deliberately
+is not one, and that is a refusal rather than an omission.
+
+The alert list answers one question — would a person have to get out of bed for
+this? — and a first sighting of an error type does not. The first deploy after a
+release would page a dozen times, and a channel that cries wolf on release day
+is muted before the failure that mattered arrives.
+
+Instead a new type gets a distinct `warn` line with `control: error_tracking`
+(alert on it in your own log platform if you want to) and a `newSinceBoot` count
+on `GET /api/admin/health/detailed`. Volume is already covered: a new error that
+actually matters shows up in `error_rate`, which does page.
+
+---
+
+## 8. Product metrics
 
 `GET /api/admin/metrics/product`, staff-only (`audit:read`), every figure an
 aggregate computed by SQL in our own database.
@@ -218,10 +290,13 @@ what this product is for.
 
 ---
 
-## 8. Known limitations
+## 9. Known limitations
 
 - **Tracing is declared and unread.** `OTEL_EXPORTER_OTLP_ENDPOINT` is a
   configuration key with no exporter behind it.
+- **Error aggregation is per process.** Each instance keeps its own map, so
+  the operator console shows the instance that answered. The configured
+  provider is what aggregates across a fleet.
 - **`ai_quota_remaining`, `queue_size`, and `storage_bytes` are registered but
   not yet populated** — the providers that would report them do not expose the
   figures today. They render as empty series rather than as zeros, which is the

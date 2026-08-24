@@ -66,6 +66,11 @@ import {
   createWebhookAlertSink,
 } from './alerts.js';
 import { createAuditLogger } from './audit.js';
+import {
+  createErrorTracker,
+  createSentryTransport,
+  createWebhookTransport,
+} from './error-tracking.js';
 import { createLearningRecorder } from './learning-events.js';
 import { createPaymentStore } from './payment-store.js';
 import authPlugin from './plugins/auth.js';
@@ -390,6 +395,55 @@ export const buildApp = async (options: BuildAppOptions) => {
     clock,
   });
 
+  /* Error tracking.
+   *
+   * ═══════════════════════════════════════════════════════════════════════
+   * NO SDK, ON PURPOSE.
+   * ═══════════════════════════════════════════════════════════════════════
+   *
+   * `SENTRY_DSN` was declared and read by nothing, so errors reached logs with
+   * request ids and nothing aggregated, deduplicated, or correlated them to a
+   * release.
+   *
+   * The reason there is still no Sentry package here is in error-tracking.ts:
+   * an error tracker's default integrations capture request bodies, headers and
+   * cookies, and the request body on the busiest route in this application is a
+   * child speaking. Every field on the event is placed there by hand. */
+  const errorTransport =
+    config.ERROR_TRACKING_PROVIDER === 'sentry' && config.SENTRY_DSN !== undefined
+      ? createSentryTransport({
+          dsn: config.SENTRY_DSN,
+          release: config.SERVICE_VERSION,
+          environment: config.APP_ENV,
+          timeoutMs: config.ERROR_TRACKING_TIMEOUT_MS,
+        })
+      : config.ERROR_TRACKING_PROVIDER === 'webhook' &&
+          config.ERROR_TRACKING_WEBHOOK_URL !== undefined
+        ? createWebhookTransport({
+            url: config.ERROR_TRACKING_WEBHOOK_URL,
+            release: config.SERVICE_VERSION,
+            environment: config.APP_ENV,
+            timeoutMs: config.ERROR_TRACKING_TIMEOUT_MS,
+          })
+        : undefined;
+
+  if (config.ERROR_TRACKING_PROVIDER === 'sentry' && errorTransport === undefined) {
+    // A DSN that does not parse would otherwise fail silently and look
+    // configured. Loud, and it does not stop the process: aggregation still
+    // works locally and errors still reach the log.
+    app.log.error(
+      { control: 'error_tracking' },
+      'SENTRY_DSN could not be parsed: errors will aggregate locally and be sent nowhere',
+    );
+  }
+
+  const errorTracker = createErrorTracker({
+    clock,
+    logger: app.log,
+    transport: errorTransport,
+    resendAfterMs: config.ERROR_TRACKING_RESEND_AFTER_MS,
+  });
+
   /* ═══════════════════════════════════════════════════════════════════════
    * SOMETHING HAS TO ASK.
    * ═══════════════════════════════════════════════════════════════════════
@@ -410,7 +464,7 @@ export const buildApp = async (options: BuildAppOptions) => {
     clearInterval(alertTimer);
   });
 
-  await app.register(errorBoundary);
+  await app.register(errorBoundary, { tracker: errorTracker });
   await app.register(security, { config });
   await app.register(authPlugin, { db, tokens, sessions });
 
@@ -754,7 +808,13 @@ export const buildApp = async (options: BuildAppOptions) => {
   );
 
   await app.register(
-    observabilityRoutes({ db, registry: metricsRegistry, alerts: alertMonitor, clock }),
+    observabilityRoutes({
+      db,
+      registry: metricsRegistry,
+      alerts: alertMonitor,
+      errors: errorTracker,
+      clock,
+    }),
     { prefix: '/api' },
   );
 

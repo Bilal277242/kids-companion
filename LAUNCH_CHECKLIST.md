@@ -356,13 +356,13 @@ that need review before a first submission, not after a rejection.
 
 | Item              | Status   | Evidence level                                                                                                            |
 | ----------------- | -------- | ------------------------------------------------------------------------------------------------------------------------- |
-| Unit tests        | **PASS** | 788 tests. Verified — they run, and they have caught real defects                                                         |
-| Integration tests | **PASS** | 741 tests against the real app, real plugins, real SQL, real RLS                                                          |
+| Unit tests        | **PASS** | 812 tests. Verified — they run, and they have caught real defects                                                         |
+| Integration tests | **PASS** | 746 tests against the real app, real plugins, real SQL, real RLS                                                          |
 | E2E tests         | **FAIL** | **never executed.** 5 Vitest specs skip without Docker; 7 Playwright specs have never run — browsers were never installed |
 | Performance tests | **PASS** | implemented and executed. Ten scenarios, a concurrency ladder, p50/p95/p99, and they found two real defects               |
 | Security tests    | **PASS** | 49 tests, twelve named attacks, with positive controls so a passing suite cannot be passing against nothing               |
 
-**Current: 1,529 passing, 5 skipped, 0 failing.** Coverage 88.2% statements,
+**Current: 1,558 passing, 5 skipped, 0 failing.** Coverage 88.2% statements,
 90.4% lines, against a 70% floor.
 
 The honest caveat that applies to every row above: **integration tests run
@@ -393,7 +393,7 @@ configuration are not.
    **RESOLVED** — implemented, including the plan limit that was advertised and
    never enforced.
 
-Then: error tracking, a domain and certificates, mobile release configuration,
+Then: ~~error tracking,~~ a domain and certificates, mobile release configuration,
 at least one verified payment rail, the AI spend ceiling, and executing the e2e
 and browser suites at least once.
 

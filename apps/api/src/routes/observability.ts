@@ -5,6 +5,7 @@ import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 
 import type { AlertMonitor } from '../alerts.js';
+import type { ErrorTracker } from '../error-tracking.js';
 
 /**
  * Observability endpoints.
@@ -34,6 +35,8 @@ export interface ObservabilityRoutesOptions {
   readonly db: Database;
   readonly registry: MetricsRegistry;
   readonly alerts: AlertMonitor;
+  /** Aggregated failures, for the console an operator opens after a page. */
+  readonly errors?: ErrorTracker;
   readonly clock: Clock;
   /** Whether `/metrics` is exposed at all. */
   readonly metricsEnabled: boolean;
@@ -129,6 +132,25 @@ export const observabilityRoutes =
                 p99: z.number(),
                 sampleCount: z.number().int(),
               }),
+              /* Aggregated, not enumerated. `newSinceBoot` is the figure worth
+               * reading after a deploy: a failure nobody has seen before is
+               * usually the release, and it deliberately does not page. */
+              errors: z.object({
+                distinct: z.number().int(),
+                newSinceBoot: z.number().int(),
+                total: z.number().int(),
+                top: z.array(
+                  z.object({
+                    type: z.string(),
+                    message: z.string(),
+                    code: z.string(),
+                    route: z.string(),
+                    count: z.number().int(),
+                    firstSeenAt: z.string(),
+                    lastSeenAt: z.string(),
+                  }),
+                ),
+              }),
               checkedAt: z.string(),
             }),
           },
@@ -173,6 +195,23 @@ export const observabilityRoutes =
             p99: worst.p99,
             sampleCount: worst.count,
           },
+          errors: (() => {
+            const summary = options.errors?.summary(5);
+            return {
+              distinct: summary?.distinct ?? 0,
+              newSinceBoot: summary?.newSinceBoot ?? 0,
+              total: summary?.total ?? 0,
+              top: (summary?.top ?? []).map((entry) => ({
+                type: entry.type,
+                message: entry.message,
+                code: entry.code,
+                route: entry.route,
+                count: entry.count,
+                firstSeenAt: entry.firstSeenAt,
+                lastSeenAt: entry.lastSeenAt,
+              })),
+            };
+          })(),
           checkedAt: clock.nowIso(),
         });
       },

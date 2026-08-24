@@ -364,7 +364,39 @@ const quotaSchema = z.object({
 
 const telemetrySchema = z.object({
   OTEL_EXPORTER_OTLP_ENDPOINT: urlFromEnv.optional(),
+  /**
+   * Where captured errors go.
+   *
+   * `none` still aggregates in-process and still exposes the summary on the
+   * operator console — it only means nothing leaves the building.
+   */
+  ERROR_TRACKING_PROVIDER: z.enum(['none', 'sentry', 'webhook']).default('none'),
+
+  /**
+   * The Sentry DSN, when `ERROR_TRACKING_PROVIDER=sentry`.
+   *
+   * NOTE: there is deliberately no Sentry SDK in this repository. An error
+   * tracker's default integrations capture request bodies, headers and cookies,
+   * and the request body on the busiest route here is a child speaking. The
+   * envelope is written by hand so that nothing can attach anything that was
+   * not chosen. See apps/api/src/error-tracking.ts.
+   */
   SENTRY_DSN: z.string().optional(),
+
+  /** A plain JSON endpoint, when `ERROR_TRACKING_PROVIDER=webhook`. */
+  ERROR_TRACKING_WEBHOOK_URL: urlFromEnv.optional(),
+
+  /** Per attempt. Errors are never retried: the log line is the durable record. */
+  ERROR_TRACKING_TIMEOUT_MS: intFromEnv({ min: 500, max: 30_000 }).default(5_000),
+
+  /**
+   * The shortest gap between two transmissions of the same fingerprint.
+   *
+   * The first occurrence always goes. After that, a failure repeating a
+   * thousand times a minute is still one bug, and forwarding each occurrence
+   * turns our incident into the error tracker's incident too.
+   */
+  ERROR_TRACKING_RESEND_AFTER_MS: intFromEnv({ min: 1_000 }).default(300_000),
   METRICS_ENABLED: boolFromEnv.default(true),
   METRICS_PORT: intFromEnv({ min: 1, max: 65_535 }).default(9_464),
   ANALYTICS_PROVIDER: z.enum(['posthog', 'none']).default('none'),
@@ -564,6 +596,14 @@ export const envSchema = baseSchema.superRefine((env, ctx) => {
   if (env.ANALYTICS_ENABLED && !env.ANALYTICS_WRITE_KEY) {
     issue('ANALYTICS_WRITE_KEY', 'is required when ANALYTICS_ENABLED=true');
   }
+  // A named provider with no destination is a silent no-op, which is the state
+  // error tracking was already in for months. Refused in every environment.
+  if (env.ERROR_TRACKING_PROVIDER === 'sentry' && !env.SENTRY_DSN) {
+    issue('SENTRY_DSN', 'is required when ERROR_TRACKING_PROVIDER=sentry');
+  }
+  if (env.ERROR_TRACKING_PROVIDER === 'webhook' && !env.ERROR_TRACKING_WEBHOOK_URL) {
+    issue('ERROR_TRACKING_WEBHOOK_URL', 'is required when ERROR_TRACKING_PROVIDER=webhook');
+  }
 
   /* --- Transport security in any deployed environment --- */
   if (isDeployed) {
@@ -598,6 +638,12 @@ export const envSchema = baseSchema.superRefine((env, ctx) => {
       issue(
         'SAFETY_ESCALATION_WEBHOOK_URL',
         'is required in production — disclosures must reach a human (docs/CHILD_SAFETY.md §6)',
+      );
+    }
+    if (env.ERROR_TRACKING_PROVIDER === 'none') {
+      issue(
+        'ERROR_TRACKING_PROVIDER',
+        'is required in production — errors otherwise aggregate in one process and are lost when it restarts',
       );
     }
     if (!env.ALERT_WEBHOOK_URL) {

@@ -9,6 +9,8 @@ import {
 import type { FastifyPluginAsync } from 'fastify';
 import fp from 'fastify-plugin';
 
+import type { ErrorTracker } from '../error-tracking.js';
+
 /**
  * The single error boundary. See docs/ERROR_HANDLING.md §11.
  *
@@ -78,7 +80,15 @@ const retryAfterSecondsOf = (reply: {
   return Number.isFinite(seconds) && seconds > 0 ? seconds : undefined;
 };
 
-const errorBoundaryPlugin: FastifyPluginAsync = async (app) => {
+export interface ErrorBoundaryOptions {
+  /**
+   * Aggregates errors for the operator console and, if configured, forwards
+   * them. Optional so a harness need not supply one.
+   */
+  readonly tracker?: ErrorTracker;
+}
+
+const errorBoundaryPlugin: FastifyPluginAsync<ErrorBoundaryOptions> = async (app, options) => {
   app.setErrorHandler((error, request, reply) => {
     // The presence of `error.validation` is what makes it a schema rejection —
     // not whether the details could be extracted from it. Gating on the details
@@ -133,6 +143,30 @@ const errorBoundaryPlugin: FastifyPluginAsync = async (app) => {
     };
 
     app.log[appError.logLevel](logPayload, 'request failed');
+
+    /* ═══════════════════════════════════════════════════════════════════════
+     * THE CAPTURE POINT, AND ONLY 5xx.
+     * ═══════════════════════════════════════════════════════════════════════
+     *
+     * A 400 is a caller mistake, a 429 is a limit doing its job, a 404 is a
+     * client asking for something that is not there. None of them is a bug in
+     * this application, and a tracker full of them is one nobody reads.
+     *
+     * Note what is handed over: the error, its classification, the route
+     * PATTERN and the method. Not the request, not its body, not its query,
+     * not its headers, not the child. See apps/api/src/error-tracking.ts for
+     * why that list is written out by hand rather than delegated to an SDK.
+     */
+    if (appError.httpStatus >= 500) {
+      options.tracker?.capture({
+        error,
+        code: appError.code,
+        category: appError.category,
+        httpStatus: appError.httpStatus,
+        route: request.routeOptions.url ?? 'unmatched',
+        method: request.method,
+      });
+    }
 
     void reply.status(appError.httpStatus).send(appError.toClientBody(request.requestId));
   });

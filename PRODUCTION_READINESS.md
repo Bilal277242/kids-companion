@@ -13,7 +13,7 @@ because the first reading was wrong.
 
 # NOT READY FOR PRODUCTION
 
-**7 PASS · 4 PARTIAL · 6 FAIL** — of seventeen categories.
+**8 PASS · 4 PARTIAL · 5 FAIL** — of seventeen categories.
 
 This is not a close call, and the reason is not the count. One finding is a
 child-safety gap rather than an infrastructure one:
@@ -24,10 +24,9 @@ child-safety gap rather than an infrastructure one:
 > the worker until it lands. **Who that endpoint belongs to remains Q-07 and
 > still blocks launch** — the mechanism exists, the protocol does not. See F-01.
 
-Nothing here should be read as "close, pending sign-off". Three of the failures
-(storage, rate limiting, error tracking) are missing implementations, not
-settings, and two more (backups, domain) are infrastructure that does not exist
-yet.
+Nothing here should be read as "close, pending sign-off". Two of the failures
+(storage, rate limiting) are missing implementations, not settings, and two more
+(backups, domain) are infrastructure that does not exist yet.
 
 Verdicts marked RESOLVED were fixed after this review. The original finding is
 kept verbatim in each case, because what a readiness review said before the fix
@@ -54,7 +53,7 @@ is the part worth being able to read again.
 | 13  | Domain configuration      | **FAIL**    | No domain. Every hostname in the templates is an example                                             |
 | 14  | SSL                       | **PARTIAL** | Enforced everywhere in config; no certificate or terminator exists to enforce it on                  |
 | 15  | CORS                      | **PASS**    | Explicit origins, wildcard refused at boot in any deployed environment                               |
-| 16  | Error tracking            | **FAIL**    | `SENTRY_DSN` is declared; no client is installed and nothing reads it                                |
+| 16  | Error tracking            | **PASS**    | Captured at the boundary, fingerprinted, release-correlated; production refuses `none` (F-06)        |
 | 17  | Rollback strategy         | **PASS**    | Documented, correct about the forward-only database; never rehearsed                                 |
 
 ---
@@ -68,7 +67,7 @@ by any code.** Several are the _only_ mechanism their category has.
 | ----------------------------------- | ---------------------- | ----------------------------------------------------- |
 | ~~`SAFETY_ESCALATION_WEBHOOK_URL`~~ | child safety           | **RESOLVED** — read, routed, retried (F-01)           |
 | `AI_DAILY_COST_CEILING_USD`         | AI limits              | No account-wide spend ceiling                         |
-| `SENTRY_DSN`                        | error tracking         | No error tracking                                     |
+| ~~`SENTRY_DSN`~~                    | error tracking         | **RESOLVED** — read, with no SDK attached (F-06)      |
 | `STORAGE_PROVIDER`                  | storage                | No object store                                       |
 | `OTEL_EXPORTER_OTLP_ENDPOINT`       | monitoring             | No tracing                                            |
 | `ENCRYPTION_ACTIVE_KEY_ID`          | database               | Key id is hard-coded `'placeholder'`                  |
@@ -182,12 +181,72 @@ Audio retention _is_ implemented (`app.expire_audio_artifacts`, wired through
 A retention control a parent can set, that does nothing, is worse than not
 offering it.
 
-### F-06 · No error tracking · **MEDIUM**
+### F-06 · No error tracking · ~~**MEDIUM**~~ **RESOLVED**
 
 **Category:** error tracking. `SENTRY_DSN` is declared and optional; no client
 is installed in any package and no code reads it. Errors reach structured logs
 with request ids — real, and not the same thing. There is no aggregation, no
 deduplication, no release correlation, and no alert on a new error type.
+
+#### Resolution
+
+`apps/api/src/error-tracking.ts`, captured at the single error boundary.
+`ERROR_TRACKING_PROVIDER` must name a real destination in production, and a
+provider named without one is refused at boot in every environment.
+
+Three of the four gaps are closed directly. **Aggregation and deduplication:**
+errors are fingerprinted as `type | scrubbed message | innermost own frame`, so
+"row 41" and "row 87" are one bug while the same message from two places stays
+two. **Release correlation:** `SERVICE_VERSION` and `APP_ENV` on every event.
+Only 5xx is captured — a 400 is a caller's mistake, and anyone able to post a
+malformed body could otherwise fill the tracker on demand.
+
+**The fourth is a deliberate refusal.** There is no alert on a new error type.
+The alert list answers one question — would a person have to get out of bed for
+this? — and a first sighting does not; the first deploy after a release would
+page a dozen times, and a channel that cries wolf on release day is muted before
+the failure that mattered arrives. Instead a new type gets a distinct `warn`
+line and a `newSinceBoot` count on the operator console, and volume is already
+covered by `error_rate`, which does page.
+
+#### The decision that mattered more than any of that
+
+**There is no Sentry SDK in this repository, and adding one would be a privacy
+regression.**
+
+An error tracker's default integrations capture request bodies, headers,
+cookies and query strings. The request body on the busiest route in this
+application is a **child speaking**. Getting that wrong does not produce a bug
+report; it produces a transcript of a five-year-old in somebody else's database,
+and no later configuration change takes it back out.
+
+So the Sentry envelope is written by hand, the way `probeRedis` speaks RESP
+without a Redis client. Every field is placed deliberately, which is what makes
+the privacy property testable rather than aspirational — with an SDK no test
+here would ever see a body being attached.
+
+| Sent                              | Never sent                                   |
+| --------------------------------- | -------------------------------------------- |
+| error type, scrubbed message      | request body, query string, headers, cookies |
+| our own frames, basenames only    | the child's utterance or the model's reply   |
+| route **pattern**, method, status | any child, parent, or conversation id        |
+| release, environment, counts      | any name                                     |
+
+Messages are scrubbed before they leave: quoted strings, emails, uuids, long
+tokens and numbers removed, then capped. Our own `AppError` messages are fixed
+strings and safe by construction; the danger is the errors we did not write — a
+driver quoting the row it choked on, a provider returning the prompt inside its
+complaint.
+
+**Verification.** `tests/integration/error-tracking.test.ts` fails the database
+mid-turn with an error carrying the child's sentence inside it, and asserts the
+delivered event contains no word of it, no id, and no credential. Plus 22 unit
+tests on scrubbing, frames, grouping, volume control and the envelope.
+
+A first draft used a failing AI provider and captured nothing — the engine
+catches provider failures and returns a degraded reply, which is the product
+working correctly. The database path is the one that genuinely reaches the
+boundary.
 
 ### F-07 · Alerts have nowhere to go · ~~**HIGH**~~ **RESOLVED**
 
@@ -438,7 +497,7 @@ cost per turn) with no cap on signups.
 5. **F-05** — transcript retention, or withdraw the control that claims it.
 6. ~~**F-07** — an alert destination that is not a log file.~~ **RESOLVED.**
 
-**Then:** error tracking (F-06), domain and certificates (F-09), mobile release
+**Then:** ~~error tracking (F-06),~~ domain and certificates (F-09), mobile release
 configuration (F-08), at least one verified payment rail, and the AI cost
 ceiling.
 

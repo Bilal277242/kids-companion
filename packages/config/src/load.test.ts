@@ -11,6 +11,8 @@ const deployedBase = {
   REDIS_KEY_PREFIX: 'kc:prod:',
   SAFETY_ESCALATION_WEBHOOK_URL: 'https://alerts.example.com/hook',
   ALERT_WEBHOOK_URL: 'https://alerts.example.com/ops',
+  ERROR_TRACKING_PROVIDER: 'webhook',
+  ERROR_TRACKING_WEBHOOK_URL: 'https://errors.example.com/ingest',
   CORS_ALLOWED_ORIGINS: 'https://app.example.com',
   // A deployed environment must name a real rail; the mock one is refused.
   PAYMENTS_PROVIDER: 'stripe',
@@ -139,6 +141,25 @@ describe('cross-field rules', () => {
     // Local and CI have no pager and should not pretend to.
     expect(() => parseConfig({})).not.toThrow();
     expect(parseConfig({}).ALERT_WEBHOOK_URL).toBeUndefined();
+  });
+
+  it('refuses to start production with error tracking switched off', () => {
+    /* `SENTRY_DSN` was declared, validated, documented and read by nothing for
+     * months. The lesson is not "wire it up" — it is that a category with a
+     * plausible default is exactly the kind that is never noticed to be
+     * missing, so production has to say no. */
+    expect(() => parseConfig({ ...deployedBase, ERROR_TRACKING_PROVIDER: 'none' })).toThrow(
+      /ERROR_TRACKING_PROVIDER/,
+    );
+  });
+
+  it('refuses a named error tracking provider with no destination', () => {
+    // A provider that names no destination is a silent no-op, which is the
+    // state error tracking was already in. Refused in every environment.
+    expect(() => parseConfig({ ERROR_TRACKING_PROVIDER: 'sentry' })).toThrow(/SENTRY_DSN/);
+    expect(() => parseConfig({ ERROR_TRACKING_PROVIDER: 'webhook' })).toThrow(
+      /ERROR_TRACKING_WEBHOOK_URL/,
+    );
   });
 
   it('refuses to retain raw child audio in production without explicit acknowledgement', () => {
