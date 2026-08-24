@@ -139,11 +139,59 @@ the product is down. That one means the product is **up and unsafe** — childre
 are talking and the layer that checks what reaches them is not working. One
 occurrence is enough.
 
-An alert already firing is not re-delivered; it clears when the measurement
-recovers. The default sink is a `fatal` log line rather than a webhook: every
-deployment already ships logs, and an alerting path with a network dependency
-fails exactly when it is needed. A webhook sink wraps it rather than replacing
-it.
+Each condition has a producer, and they are worth naming because for a long
+time three of them had none:
+
+| Condition         | Reported by                                                   |
+| ----------------- | ------------------------------------------------------------- |
+| `safety_pipeline` | every conversation and voice turn (`turn-health.ts`)          |
+| `ai_provider`     | the same, on a provider timeout or outage                     |
+| `database`        | the readiness probe, which already runs against the real pool |
+| `error_rate`      | the metrics registry, on the evaluation timer                 |
+| `latency`         | the same                                                      |
+
+**A blocked turn is not a safety failure.** It is the pipeline working: a rule
+fired and a reply was stopped. The failure is `safety_unavailable` — the
+classifier could not be reached, so the pipeline failed closed and children are
+hitting a wall mid-conversation.
+
+### 6.1 Where an alert goes
+
+`ALERT_WEBHOOK_URL` is **required in production**. Without it every alert is a
+`fatal` log line that something else would have to notice.
+
+The log line is written either way and is never removed: every deployment
+already ships logs somewhere, and an alerting path with a network dependency
+fails exactly when it is needed. The webhook is layered on top of it, not
+substituted for it — if the post fails, the alert is still recorded.
+
+`ALERT_WEBHOOK_FORMAT` selects the body:
+
+- `generic` — a JSON object (`event`, `condition`, `severity`, `summary`,
+  `observed`). Point an Alertmanager receiver, an Opsgenie custom webhook, or
+  anything in-house at it.
+- `slack` — the incoming-webhook `text` shape, which Mattermost and others also
+  accept.
+
+Three attempts, briefly spaced, then it gives up and the log line stands alone.
+A 4xx other than 429 is not retried. **The URL is a credential** — a Slack
+incoming-webhook URL lets anyone holding it post into the channel — so it is
+never written to a log, never included in an error message, and never placed in
+an alert body.
+
+An alert body carries the condition, the severity, and the measurement that
+tripped it. **It never carries conversation content.**
+
+### 6.2 Firing, and stopping
+
+An alert already firing is not re-delivered — a condition that pages every
+minute is one that gets muted.
+
+It clears when the measurement recovers, or when nothing has reported it for
+`reArmAfterMs` (15 minutes), and **a resolution is delivered when it does**.
+That window exists because `safety_pipeline` and `database` are only ever told
+about failures: with no way to clear them and no re-delivery, they fired once
+per process and then went silent for good.
 
 ---
 
@@ -172,8 +220,8 @@ what this product is for.
 
 ## 8. Known limitations
 
-- **Alert evaluation runs on scrape and on request**, not on a dedicated timer.
-  A deployment with no scraper gets no periodic evaluation.
+- **Tracing is declared and unread.** `OTEL_EXPORTER_OTLP_ENDPOINT` is a
+  configuration key with no exporter behind it.
 - **`ai_quota_remaining`, `queue_size`, and `storage_bytes` are registered but
   not yet populated** — the providers that would report them do not expose the
   figures today. They render as empty series rather than as zeros, which is the

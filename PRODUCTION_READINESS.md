@@ -13,7 +13,7 @@ because the first reading was wrong.
 
 # NOT READY FOR PRODUCTION
 
-**6 PASS · 4 PARTIAL · 7 FAIL** — of seventeen categories.
+**7 PASS · 4 PARTIAL · 6 FAIL** — of seventeen categories.
 
 This is not a close call, and the reason is not the count. One finding is a
 child-safety gap rather than an infrastructure one:
@@ -29,6 +29,10 @@ Nothing here should be read as "close, pending sign-off". Three of the failures
 settings, and two more (backups, domain) are infrastructure that does not exist
 yet.
 
+Verdicts marked RESOLVED were fixed after this review. The original finding is
+kept verbatim in each case, because what a readiness review said before the fix
+is the part worth being able to read again.
+
 ---
 
 ## The table
@@ -40,7 +44,7 @@ yet.
 | 3   | Database                  | **PASS**    | Forward-only migrations, checksum ledger, pool + timeout + TLS enforced                              |
 | 4   | RLS                       | **PARTIAL** | All 50 tables `ENABLE`+`FORCE`, proven from the catalogue; 85 policies not each behaviourally tested |
 | 5   | Backups                   | **FAIL**    | None. No script, no schedule, no restore drill                                                       |
-| 6   | Monitoring                | **FAIL**    | Alerts fire into a log file. No external system receives one                                         |
+| 6   | Monitoring                | **PASS**    | Alerts reach a configured destination; production refuses to boot without one (F-07 resolved)        |
 | 7   | Logging                   | **PASS**    | Redaction at 100 % coverage, request ids, no internals in responses                                  |
 | 8   | Rate limits               | **FAIL**    | Per-instance and in-memory; behind _N_ instances every limit is *N*×                                 |
 | 9   | AI limits                 | **PARTIAL** | Per-child and per-plan enforced; the account-wide cost ceiling is not implemented                    |
@@ -185,7 +189,7 @@ is installed in any package and no code reads it. Errors reach structured logs
 with request ids — real, and not the same thing. There is no aggregation, no
 deduplication, no release correlation, and no alert on a new error type.
 
-### F-07 · Alerts have nowhere to go · **HIGH**
+### F-07 · Alerts have nowhere to go · ~~**HIGH**~~ **RESOLVED**
 
 **Category:** monitoring. Five alert conditions exist, are correct, and are
 tested to fire and clear (18 tests). The default sink writes a `fatal` log line
@@ -197,6 +201,49 @@ including `safety_pipeline`, is a log line that something else would have to
 notice. Nothing does.
 
 `OTEL_EXPORTER_OTLP_ENDPOINT` is likewise declared and unread: no tracing.
+
+#### Resolution
+
+`ALERT_WEBHOOK_URL` now exists, is wired, and **production refuses to boot
+without it** — the same treatment `SAFETY_ESCALATION_WEBHOOK_URL` gets, for the
+same reason. `generic` posts a JSON body for an Alertmanager-style receiver;
+`slack` posts the incoming-webhook shape, so a person can be reading alerts on
+their phone without anybody building a receiver first. Three attempts, then the
+log line stands alone.
+
+**The finding understated the problem.** Wiring the destination revealed that
+three of the five conditions had no producer at all: `reportAiFailure`,
+`reportAiSuccess` and `reportDatabaseFailure` were called by nothing, and
+`reportSafetyFailure` had exactly one caller — the escalation delivery failure
+path — so the alert named after the safety pipeline could not fire when the
+safety pipeline failed. `evaluate()` ran only when something scraped
+`/metrics`, so the error-rate and latency thresholds were never checked on their
+own. A destination with nothing to send is not alerting.
+
+| Now reported by                                                   | Condition                        |
+| ----------------------------------------------------------------- | -------------------------------- |
+| every conversation and voice turn (`apps/api/src/turn-health.ts`) | `safety_pipeline`, `ai_provider` |
+| the readiness probe, already running against the real pool        | `database`                       |
+| a boot-time timer, `ALERT_EVALUATION_INTERVAL_MS`                 | `error_rate`, `latency`          |
+
+Two further defects fixed in passing, both of which made alerting quietly stop
+working rather than fail visibly:
+
+1. **`safety_pipeline` and `database` could fire only once per process.** They
+   are only ever told about failures, so nothing could clear them — and an
+   already-firing condition is deliberately not re-delivered. Together that
+   meant the most important alert in the system went permanently silent after
+   its first firing. Both now have a positive signal, plus a 15-minute re-arm
+   for the case where the failure simply stops recurring.
+2. **A cleared condition told nobody.** Somebody woken at 2 a.m. had no way to
+   learn it had recovered. Resolutions are now delivered.
+
+**Verification.** `tests/integration/alerting.test.ts` runs a real HTTP server,
+points the API at it, breaks the safety classifier through the real conversation
+route, and asserts a real request arrives carrying no conversation content —
+plus 12 unit tests on the transport, the bodies, and re-arming. The URL is
+treated as a credential throughout: never logged, never in an error, never in a
+body, and asserted so.
 
 ### F-08 · Mobile is not release-configured · **MEDIUM**
 
@@ -389,7 +436,7 @@ cost per turn) with no cap on signups.
    multi-instance.
 4. **F-03** — Redis-backed rate limiting, which also unblocks multi-instance.
 5. **F-05** — transcript retention, or withdraw the control that claims it.
-6. **F-07** — an alert destination that is not a log file.
+6. ~~**F-07** — an alert destination that is not a log file.~~ **RESOLVED.**
 
 **Then:** error tracking (F-06), domain and certificates (F-09), mobile release
 configuration (F-08), at least one verified payment rail, and the AI cost

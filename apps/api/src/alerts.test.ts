@@ -3,11 +3,14 @@ import type { Clock, Logger } from '@kids/shared';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  alertWebhookBody,
   createAlertMonitor,
+  createAlertWebhookTransport,
   createLogAlertSink,
   createWebhookAlertSink,
   DEFAULT_THRESHOLDS,
   type Alert,
+  type AlertResolution,
   type AlertSink,
 } from './alerts.js';
 
@@ -40,9 +43,21 @@ const at = (iso: string): Clock => ({
 const clock = at('2026-09-01T12:00:00.000Z');
 
 /** Collects what was delivered, so a test can assert on it. */
-const recordingSink = (): { sink: AlertSink; delivered: Alert[] } => {
+const recordingSink = (): {
+  sink: AlertSink;
+  delivered: Alert[];
+  resolved: AlertResolution[];
+} => {
   const delivered: Alert[] = [];
-  return { sink: { deliver: (alert) => delivered.push(alert) }, delivered };
+  const resolved: AlertResolution[] = [];
+  return {
+    sink: {
+      deliver: (alert) => delivered.push(alert),
+      resolve: (resolution) => resolved.push(resolution),
+    },
+    delivered,
+    resolved,
+  };
 };
 
 /** A registry with the technical metrics the monitor reads already defined. */
@@ -334,8 +349,7 @@ describe('alert sinks', () => {
   it('posts to the webhook and still writes the log line', async () => {
     const posted: string[] = [];
     const sink = createWebhookAlertSink(createLogAlertSink(logger), {
-      url: 'https://pager.invalid/hook',
-      post: async (_url, body) => {
+      post: async (body) => {
         posted.push(body);
         return await Promise.resolve();
       },
@@ -352,7 +366,6 @@ describe('alert sinks', () => {
 
   it('survives a webhook that fails, because the log is the reliable path', async () => {
     const sink = createWebhookAlertSink(createLogAlertSink(logger), {
-      url: 'https://pager.invalid/hook',
       post: async () => await Promise.reject(new Error('pager is down')),
       logger,
     });
@@ -367,5 +380,241 @@ describe('alert sinks', () => {
 
     expect(fatal).toHaveBeenCalledTimes(1);
     expect(error).toHaveBeenCalledTimes(1);
+  });
+});
+
+/* ========================================================================== */
+/* The destination                                                            */
+/* ========================================================================== */
+
+/** A clock the test can move, since re-arming is a question about time. */
+const movableClock = (): Clock & { advance: (ms: number) => void } => {
+  let ms = new Date('2026-09-01T12:00:00.000Z').getTime();
+  return {
+    now: () => ms,
+    nowIso: () => new Date(ms).toISOString() as never,
+    advance: (by: number) => {
+      ms += by;
+    },
+  };
+};
+
+describe('the webhook transport', () => {
+  const okResponse = { ok: true, status: 200 } as Response;
+
+  it('never puts the url in an error, because the url is a credential', async () => {
+    /* ═══════════════════════════════════════════════════════════════════════
+     * A SLACK WEBHOOK URL IS A BEARER TOKEN IN PATH FORM.
+     * ═══════════════════════════════════════════════════════════════════════
+     *
+     * Anyone holding it can post into the channel. A fetch failure can carry
+     * the host — sometimes the whole request — in its message, so the transport
+     * reduces every failure to a short reason of its own before it goes
+     * anywhere near a logger.
+     */
+    const secret = 'https://hooks.slack.example/services/PLACEHOLDER/not-a-real-credential';
+    const post = createAlertWebhookTransport({
+      url: secret,
+      attempts: 1,
+      fetchImpl: async () => await Promise.reject(new Error('connect ECONNREFUSED ' + secret)),
+    });
+
+    await expect(post('{}')).rejects.toThrow(/alert webhook/);
+    await post('{}').catch((error: unknown) => {
+      expect(String(error)).not.toContain('not-a-real-credential');
+      expect(String(error)).not.toContain('hooks.slack.example');
+    });
+  });
+
+  it('retries a transient failure, and gives up bounded', async () => {
+    // The log line is the reliable record, so retrying for a minute would only
+    // delay the next alert behind this one.
+    let calls = 0;
+    const post = createAlertWebhookTransport({
+      url: 'https://pager.example/hook',
+      attempts: 3,
+      sleep: async () => {
+        await Promise.resolve();
+      },
+      fetchImpl: async () => {
+        calls += 1;
+        return await Promise.resolve({ ok: false, status: 503 } as Response);
+      },
+    });
+
+    await expect(post('{}')).rejects.toThrow(/503/);
+    expect(calls).toBe(3);
+  });
+
+  it('does not retry a rejection that will never become true', async () => {
+    // A 400 means the body is wrong. Sending it twice more is noise.
+    let calls = 0;
+    const post = createAlertWebhookTransport({
+      url: 'https://pager.example/hook',
+      attempts: 3,
+      sleep: async () => {
+        await Promise.resolve();
+      },
+      fetchImpl: async () => {
+        calls += 1;
+        return await Promise.resolve({ ok: false, status: 400 } as Response);
+      },
+    });
+
+    await expect(post('{}')).rejects.toThrow(/400/);
+    expect(calls).toBe(1);
+  });
+
+  it('stops as soon as it succeeds', async () => {
+    let calls = 0;
+    const post = createAlertWebhookTransport({
+      url: 'https://pager.example/hook',
+      sleep: async () => {
+        await Promise.resolve();
+      },
+      fetchImpl: async () => {
+        calls += 1;
+        return await Promise.resolve(okResponse);
+      },
+    });
+
+    await expect(post('{}')).resolves.toBeUndefined();
+    expect(calls).toBe(1);
+  });
+});
+
+describe('the body a destination receives', () => {
+  const firing: Alert = {
+    condition: 'safety_pipeline',
+    severity: 'critical',
+    summary: 'The safety pipeline is failing.',
+    observed: { detail: 'classifier timed out' },
+    firstSeenAt: '2026-09-01T12:00:00.000Z',
+  };
+
+  it('is a plain object by default, for a receiver somebody wrote', () => {
+    expect(JSON.parse(alertWebhookBody(firing, 'generic'))).toMatchObject({
+      event: 'alert.firing',
+      condition: 'safety_pipeline',
+      severity: 'critical',
+    });
+  });
+
+  it('is a readable sentence in slack form, because a person reads it on a phone', () => {
+    const body = JSON.parse(alertWebhookBody(firing, 'slack')) as { text: string };
+
+    expect(body.text).toContain('safety_pipeline');
+    expect(body.text).toContain('The safety pipeline is failing.');
+    // The measurement travels with it, so nobody has to go and find it.
+    expect(body.text).toContain('classifier timed out');
+  });
+
+  it('carries no conversation content in either shape', () => {
+    /* Alerts go wherever the operator configured — a chat channel, a ticketing
+     * system, somebody's phone. An alert body is the last place a child's words
+     * should be able to appear. */
+    for (const format of ['generic', 'slack'] as const) {
+      const body = alertWebhookBody(firing, format).toLowerCase();
+      for (const forbidden of ['transcript', 'utterance', 'childname', 'reply']) {
+        expect(body, forbidden).not.toContain(forbidden);
+      }
+    }
+  });
+});
+
+/* ========================================================================== */
+/* Recovery, and not going permanently silent                                 */
+/* ========================================================================== */
+
+describe('resolution', () => {
+  it('says when a condition recovered', () => {
+    // Somebody woken at 2 a.m. otherwise has no way to learn it is over except
+    // by getting up and looking.
+    const { sink, delivered, resolved } = recordingSink();
+    const monitor = createAlertMonitor({ registry: registryWith({}), sink, clock });
+
+    monitor.reportDatabaseFailure('connection refused');
+    expect(delivered).toHaveLength(1);
+
+    monitor.reportDatabaseSuccess();
+    expect(resolved).toHaveLength(1);
+    expect(resolved[0]?.condition).toBe('database');
+    expect(resolved[0]?.firstSeenAt).toBe(delivered[0]?.firstSeenAt);
+  });
+
+  it('does not announce a recovery for something that never fired', () => {
+    const { sink, resolved } = recordingSink();
+    const monitor = createAlertMonitor({ registry: registryWith({}), sink, clock });
+
+    monitor.reportDatabaseSuccess();
+    monitor.reportSafetySuccess();
+
+    expect(resolved).toHaveLength(0);
+  });
+
+  it('lets a condition fire again after it has recovered', () => {
+    /* ═══════════════════════════════════════════════════════════════════════
+     * THE ONE THAT WAS BROKEN.
+     * ═══════════════════════════════════════════════════════════════════════
+     *
+     * `safety_pipeline` and `database` were only ever told about failures, so
+     * nothing could clear them — and an already-firing condition is not
+     * re-delivered, by design, so that a real outage does not page every
+     * minute. Together that meant the most important alert in the system fired
+     * exactly once per process and then went silent for good.
+     */
+    const { sink, delivered } = recordingSink();
+    const monitor = createAlertMonitor({ registry: registryWith({}), sink, clock });
+
+    monitor.reportSafetyFailure('classifier unreachable');
+    monitor.reportSafetyFailure('classifier unreachable again');
+    // Still one: a continuing outage does not page repeatedly.
+    expect(delivered).toHaveLength(1);
+
+    monitor.reportSafetySuccess();
+    monitor.reportSafetyFailure('a new incident, hours later');
+
+    expect(delivered).toHaveLength(2);
+  });
+
+  it('clears a condition that has simply gone quiet', () => {
+    /* The safety and database conditions have no positive signal beyond work
+     * continuing to succeed. If nothing reports the failure again for the
+     * re-arm window it is over, and the next one must be able to page. */
+    const moving = movableClock();
+    const { sink, delivered, resolved } = recordingSink();
+    const monitor = createAlertMonitor({ registry: registryWith({}), sink, clock: moving });
+
+    monitor.reportDatabaseFailure('connection refused');
+    expect(delivered).toHaveLength(1);
+
+    monitor.evaluate();
+    expect(resolved).toHaveLength(0);
+
+    moving.advance(DEFAULT_THRESHOLDS.reArmAfterMs + 1_000);
+    monitor.evaluate();
+
+    expect(resolved).toHaveLength(1);
+    monitor.reportDatabaseFailure('and it is down again');
+    expect(delivered).toHaveLength(2);
+  });
+
+  it('keeps a continuing failure firing rather than expiring it', () => {
+    // A dependency that has been down for an hour is still down. Expiring it
+    // would page again on the same incident.
+    const moving = movableClock();
+    const { sink, delivered, resolved } = recordingSink();
+    const monitor = createAlertMonitor({ registry: registryWith({}), sink, clock: moving });
+
+    monitor.reportDatabaseFailure('connection refused');
+
+    for (let i = 0; i < 5; i += 1) {
+      moving.advance(DEFAULT_THRESHOLDS.reArmAfterMs / 2);
+      monitor.reportDatabaseFailure('still refused');
+      monitor.evaluate();
+    }
+
+    expect(delivered).toHaveLength(1);
+    expect(resolved).toHaveLength(0);
   });
 });

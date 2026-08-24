@@ -19,6 +19,7 @@ import { z } from 'zod';
 
 import { auditOrFail, type AuditLogger } from '../audit.js';
 import { CHILD_FACING_MESSAGE, checkParentalGate } from '../parental-gate.js';
+import type { TurnHealthReporter } from '../turn-health.js';
 
 /**
  * The voice API.
@@ -55,6 +56,8 @@ export interface VoiceRoutesOptions {
   readonly encryptionKeyId: string;
   readonly maxExchanges: number;
   readonly rateLimitPerMinute: number;
+  /** Reports what a turn says about backend health. See turn-health.ts. */
+  readonly health?: TurnHealthReporter;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -642,6 +645,10 @@ export const voiceRoutes =
           },
           request,
         );
+
+        // Same producer as the text route: a voice turn that fails closed is
+        // the same safety failure, and must page the same way.
+        options.health?.record({ status: turn.status, degradedReason: turn.degradedReason });
 
         request.log.info(
           {

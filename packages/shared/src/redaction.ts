@@ -58,6 +58,11 @@ export const REDACTED_PATHS: readonly string[] = [
   '*.apiKey',
   'secret',
   '*.secret',
+  // A webhook URL is a bearer credential in path form — the Slack incoming
+  // variety is enough on its own to post into somebody's channel. The alert
+  // transport never logs one, and this is the second line of that defence.
+  'webhookUrl',
+  '*.webhookUrl',
   'authorization',
   'req.headers.authorization',
   'req.headers.cookie',

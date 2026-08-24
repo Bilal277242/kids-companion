@@ -13,8 +13,8 @@ executed. Nothing is marked PASS for existing.
 
 |                  | Count |
 | ---------------- | ----: |
-| **PASS**         |    21 |
-| **FAIL**         |     8 |
+| **PASS**         |    22 |
+| **FAIL**         |     7 |
 | **NOT VERIFIED** |    17 |
 
 **Not one item in Infrastructure or Mobile passes.** No container has been
@@ -286,17 +286,17 @@ unproven against a real vendor.
 
 ## Infrastructure
 
-| Item                   | Status           | Evidence level                                                                                                                                                                                                      |
-| ---------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Production environment | **FAIL**         | does not exist. No host, no domain, no certificate, no orchestrator — **external config**                                                                                                                           |
-| Database               | **NOT VERIFIED** | implemented, tested. Migrations forward-only with a checksum ledger, applied to real PostgreSQL 17 in CI. No production instance exists — **external config**                                                       |
-| Backups                | **FAIL**         | nothing. No schedule, no retention policy, no restore ever performed — **external config**                                                                                                                          |
-| Monitoring             | **FAIL**         | metrics implemented and tested; **no external system receives them**. `OTEL_EXPORTER_OTLP_ENDPOINT` is declared and unread                                                                                          |
-| Logging                | **PASS**         | implemented, tested. Redaction at 100% of lines and branches, request ids, no internals in responses                                                                                                                |
-| Alerts                 | **FAIL**         | five conditions implemented and tested to fire and clear — **into a log file**. No pager, no webhook configured anywhere. **Safety escalations no longer depend on this**: they have their own delivery path (I-01) |
-| Rollback               | **NOT VERIFIED** | documented and correct about the forward-only database. **Never rehearsed**, and its backup fallback does not exist                                                                                                 |
+| Item                   | Status           | Evidence level                                                                                                                                                               |
+| ---------------------- | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Production environment | **FAIL**         | does not exist. No host, no domain, no certificate, no orchestrator — **external config**                                                                                    |
+| Database               | **NOT VERIFIED** | implemented, tested. Migrations forward-only with a checksum ledger, applied to real PostgreSQL 17 in CI. No production instance exists — **external config**                |
+| Backups                | **FAIL**         | nothing. No schedule, no retention policy, no restore ever performed — **external config**                                                                                   |
+| Monitoring             | **FAIL**         | metrics implemented and tested; **no external system receives them**. `OTEL_EXPORTER_OTLP_ENDPOINT` is declared and unread                                                   |
+| Logging                | **PASS**         | implemented, tested. Redaction at 100% of lines and branches, request ids, no internals in responses                                                                         |
+| Alerts                 | **PASS**         | five conditions, each with a producer, delivered to a configured destination and verified against a real HTTP server. Production refuses to boot without one (I-01 resolved) |
+| Rollback               | **NOT VERIFIED** | documented and correct about the forward-only database. **Never rehearsed**, and its backup fallback does not exist                                                          |
 
-### I-01 · Alerts reach nobody · _escalation half resolved_
+### I-01 · Alerts reach nobody · ~~_escalation half resolved_~~ **RESOLVED**
 
 The alert monitor is correct and tested: it fires on the first safety failure,
 does not repeat while firing, clears on recovery, and survives a webhook outage.
@@ -309,6 +309,27 @@ that something else would have to notice, and nothing does.
 For `safety_pipeline` that is an operational gap. For a **disclosure of harm**
 it is worse: `SAFETY_ESCALATION_WEBHOOK_URL` is _required_ for production to
 boot, with the message "disclosures must reach a human", and no code reads it.
+
+#### Resolution
+
+`ALERT_WEBHOOK_URL` exists, is wired, and production refuses to boot without it.
+`generic` or `slack` bodies; three attempts; the `fatal` log line is still
+written underneath, so a webhook outage does not lose the alert.
+
+The assessment above was too kind. Three of the five conditions had **no
+producer at all**, and `reportSafetyFailure` was called only by the escalation
+delivery path — so the alert named after the safety pipeline could not fire when
+the safety pipeline failed. Turns now report it, the readiness probe reports the
+database, and a timer evaluates the thresholds instead of waiting for a scrape.
+
+Two conditions could also fire only **once per process**, because nothing could
+clear them and a firing condition is deliberately not re-delivered; and a
+cleared alert told nobody it had recovered. Both fixed.
+
+Verified end to end in `tests/integration/alerting.test.ts` against a real HTTP
+server: a child talks, the classifier is unreachable, and a request arrives
+saying so — carrying the condition and the measurement, and none of the child's
+words.
 
 ---
 
@@ -335,13 +356,13 @@ that need review before a first submission, not after a rejection.
 
 | Item              | Status   | Evidence level                                                                                                            |
 | ----------------- | -------- | ------------------------------------------------------------------------------------------------------------------------- |
-| Unit tests        | **PASS** | 765 tests. Verified — they run, and they have caught real defects                                                         |
-| Integration tests | **PASS** | 736 tests against the real app, real plugins, real SQL, real RLS                                                          |
+| Unit tests        | **PASS** | 788 tests. Verified — they run, and they have caught real defects                                                         |
+| Integration tests | **PASS** | 741 tests against the real app, real plugins, real SQL, real RLS                                                          |
 | E2E tests         | **FAIL** | **never executed.** 5 Vitest specs skip without Docker; 7 Playwright specs have never run — browsers were never installed |
 | Performance tests | **PASS** | implemented and executed. Ten scenarios, a concurrency ladder, p50/p95/p99, and they found two real defects               |
 | Security tests    | **PASS** | 49 tests, twelve named attacks, with positive controls so a passing suite cannot be passing against nothing               |
 
-**Current: 1,501 passing, 5 skipped, 0 failing.** Coverage 88.2% statements,
+**Current: 1,529 passing, 5 skipped, 0 failing.** Coverage 88.2% statements,
 90.4% lines, against a 70% floor.
 
 The honest caveat that applies to every row above: **integration tests run
@@ -366,7 +387,8 @@ configuration are not.
 5. **Distributed rate limiting**, without which every limit multiplies by the
    instance count — including the one that makes password guessing impractical.
 6. **Transcript retention**, or withdraw the control that claims it.
-7. **An alert destination** that is not a log file.
+7. ~~**An alert destination** that is not a log file.~~ **RESOLVED** — and the
+   alerts themselves now have producers, which three of the five lacked.
 8. ~~**Stories** (P-02) — implement it or stop advertising it in the plan table.~~
    **RESOLVED** — implemented, including the plan limit that was advertised and
    never enforced.

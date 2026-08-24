@@ -25,6 +25,7 @@ import { wordCountOf, type LearningRecorder } from '../learning-events.js';
 import { CHILD_FACING_MESSAGE, checkParentalGate } from '../parental-gate.js';
 import { requireChildOwnership } from '../plugins/auth.js';
 import type { EscalationDelivery, EscalationReasonCode } from '../safety-escalation.js';
+import type { TurnHealthReporter } from '../turn-health.js';
 
 /**
  * The conversation API.
@@ -75,6 +76,11 @@ export interface ConversationRoutesOptions {
    * prevent.
    */
   readonly escalations?: EscalationDelivery;
+  /**
+   * Reports what a turn says about the backend's health, so the alert
+   * conditions have a producer. See apps/api/src/turn-health.ts.
+   */
+  readonly health?: TurnHealthReporter;
   /**
    * Records what a child did, for the progress dashboard.
    *
@@ -1201,6 +1207,11 @@ export const conversationRoutes =
             });
           }
         }
+
+        /* The alert conditions' producer. A blocked turn is the pipeline
+         * working and must never page anybody; `safety_unavailable` is the
+         * pipeline failing closed, and pages on the first one. */
+        options.health?.record({ status: turn.status, degradedReason: turn.degradedReason });
 
         // Structured, and content-free. `turn.status` and the layer names are
         // safe to log; the utterance and the reply are not, ever

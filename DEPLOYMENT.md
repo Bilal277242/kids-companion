@@ -225,6 +225,33 @@ credentials, and a driver error names the host, the database, and the user.
 
 ---
 
+## 5a. Alerts
+
+`ALERT_WEBHOOK_URL` is **required in production** — the API refuses to boot
+without it. Everything else about alerting has a working default.
+
+| Variable                       | Default   | Notes                                       |
+| ------------------------------ | --------- | ------------------------------------------- |
+| `ALERT_WEBHOOK_URL`            | —         | **required in production**; treat as secret |
+| `ALERT_WEBHOOK_FORMAT`         | `generic` | `generic` or `slack`                        |
+| `ALERT_WEBHOOK_TIMEOUT_MS`     | `5000`    | per attempt; three attempts                 |
+| `ALERT_EVALUATION_INTERVAL_MS` | `60000`   | how often thresholds are checked            |
+
+Set it to a Slack incoming webhook with `ALERT_WEBHOOK_FORMAT=slack` and a
+person sees an alert on their phone; point it at an Alertmanager receiver with
+`generic` and it joins whatever routing already exists. The `fatal` log line is
+written either way, so a webhook outage does not lose the alert.
+
+**Store it as a secret, not as configuration.** A Slack incoming-webhook URL is
+a bearer credential in path form: anyone holding it can post into the channel.
+The transport never logs it and never puts it in an error message.
+
+Five conditions fire. `safety_pipeline` is the one to route to a person rather
+than a dashboard — it means children are talking while the layer that checks
+what reaches them is not working. See [docs/OBSERVABILITY.md §6](docs/OBSERVABILITY.md).
+
+---
+
 ## 6. The worker
 
 One process running six scheduled sweeps, five of which are enabled:

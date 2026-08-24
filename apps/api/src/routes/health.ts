@@ -4,6 +4,7 @@ import { healthResponseSchema, readyResponseSchema } from '@kids/validation';
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 
+import type { AlertMonitor } from '../alerts.js';
 import { probeDatabase, probeRedis, type ProbeResult } from '../probes.js';
 
 /**
@@ -13,7 +14,22 @@ import { probeDatabase, probeRedis, type ProbeResult } from '../probes.js';
  * a field the schema does not name cannot be emitted.
  */
 export const healthRoutes =
-  (config: Config, dependencies: { readonly db?: Database } = {}): FastifyPluginAsyncZod =>
+  (
+    config: Config,
+    dependencies: {
+      readonly db?: Database;
+      /**
+       * Told whether the database answered.
+       *
+       * The `database` alert condition had no producer at all — nothing ever
+       * called `reportDatabaseFailure`, so it could not fire. This probe is
+       * already running on a schedule against the real connection, which makes
+       * it the honest source of that signal rather than a second health check
+       * invented to feed an alert.
+       */
+      readonly alerts?: Pick<AlertMonitor, 'reportDatabaseFailure' | 'reportDatabaseSuccess'>;
+    } = {},
+  ): FastifyPluginAsyncZod =>
   async (app) => {
     /**
      * Liveness. Deliberately touches no dependency.
@@ -66,6 +82,15 @@ export const healthRoutes =
         ]);
 
         const checks: Record<string, ProbeResult> = { database, redis };
+
+        /* `skipped` is neither: it means no database is wired into this
+         * instance, which is a configuration fact rather than an outage, and
+         * reporting it either way would make the alert lie. */
+        if (database === 'unavailable') {
+          dependencies.alerts?.reportDatabaseFailure('the readiness probe could not reach it');
+        } else if (database === 'ok') {
+          dependencies.alerts?.reportDatabaseSuccess();
+        }
 
         /* Only `unavailable` withdraws this instance from the pool.
          *

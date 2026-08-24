@@ -47,6 +47,25 @@ export interface Alert {
   readonly firstSeenAt: string;
 }
 
+/**
+ * An alert that stopped being true.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * A PAGE WITHOUT AN ALL-CLEAR IS HALF AN ALERT
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * Conditions used to clear in silence, so somebody woken at 2 a.m. had no way
+ * to learn it had recovered except by going and looking. That was survivable
+ * while the only destination was a log file nobody read. It is not survivable
+ * now that one reaches a person.
+ */
+export interface AlertResolution {
+  readonly condition: AlertCondition;
+  readonly summary: string;
+  readonly firstSeenAt: string;
+  readonly resolvedAt: string;
+}
+
 export interface AlertThresholds {
   /** Fraction of requests returning 5xx, over the sample window. */
   readonly errorRate: number;
@@ -56,6 +75,17 @@ export interface AlertThresholds {
   readonly minimumSample: number;
   /** Consecutive AI provider failures. */
   readonly aiFailures: number;
+  /**
+   * How long a condition with no positive recovery signal stays firing after it
+   * was last reported.
+   *
+   * `safety_pipeline` and `database` have nothing that says "it is working
+   * again" — they are only ever told about failures. Without this they fire
+   * once and then suppress themselves for the life of the process, which is
+   * how the most important alert in the system silently stops working after its
+   * first firing.
+   */
+  readonly reArmAfterMs: number;
 }
 
 export const DEFAULT_THRESHOLDS: AlertThresholds = Object.freeze({
@@ -68,6 +98,9 @@ export const DEFAULT_THRESHOLDS: AlertThresholds = Object.freeze({
   // not an outage, it is a health check and a crawler.
   minimumSample: 50,
   aiFailures: 5,
+  // Long enough that a flapping dependency does not page repeatedly, short
+  // enough that a second incident an hour later is not swallowed by the first.
+  reArmAfterMs: 15 * 60_000,
 });
 
 export interface AlertSink {
@@ -78,6 +111,8 @@ export interface AlertSink {
    * fail the request it is alerting about has made the outage worse.
    */
   deliver(alert: Alert): void;
+  /** Says it recovered. Same rules: never throws, never blocks. */
+  resolve(resolution: AlertResolution): void;
 }
 
 /**
@@ -103,7 +138,152 @@ export const createLogAlertSink = (logger: Logger): AlertSink => ({
       alert.summary,
     );
   },
+  // `warn`, not `fatal`. A recovery that pages at the same level as an outage
+  // teaches people that the level means nothing.
+  resolve: (resolution) => {
+    logger.warn(
+      {
+        alert: resolution.condition,
+        firstSeenAt: resolution.firstSeenAt,
+        resolvedAt: resolution.resolvedAt,
+      },
+      `RESOLVED: ${resolution.summary}`,
+    );
+  },
 });
+
+/**
+ * How the body is shaped.
+ *
+ * `generic` is a plain JSON object and is what an Alertmanager receiver, an
+ * Opsgenie custom webhook, or anything written in-house should be pointed at.
+ *
+ * `slack` is the incoming-webhook shape — a `text` field — which is also what
+ * Mattermost and several others accept. It exists because the difference
+ * between "alerts have a destination" and "a person sees an alert" is usually
+ * one field, and requiring somebody to build a receiver first is how a
+ * destination stays unconfigured.
+ */
+export type AlertWebhookFormat = 'generic' | 'slack';
+
+const SEVERITY_ICON: Readonly<Record<AlertSeverity, string>> = Object.freeze({
+  critical: '🚨',
+  warning: '⚠️',
+});
+
+/** The line a person reads on their phone. Facts first, no preamble. */
+const slackText = (alert: Alert): string => {
+  const observed = Object.entries(alert.observed)
+    .map(([key, value]) => `${key}=${String(value)}`)
+    .join(' ');
+  return [
+    `${SEVERITY_ICON[alert.severity]} *${alert.condition}* (${alert.severity})`,
+    alert.summary,
+    observed,
+  ].join('\n');
+};
+
+export const alertWebhookBody = (alert: Alert, format: AlertWebhookFormat): string =>
+  format === 'slack'
+    ? JSON.stringify({ text: slackText(alert) })
+    : JSON.stringify({
+        event: 'alert.firing',
+        condition: alert.condition,
+        severity: alert.severity,
+        summary: alert.summary,
+        observed: alert.observed,
+        firstSeenAt: alert.firstSeenAt,
+      });
+
+export const alertResolutionBody = (
+  resolution: AlertResolution,
+  format: AlertWebhookFormat,
+): string =>
+  format === 'slack'
+    ? JSON.stringify({
+        text: `✅ *${resolution.condition}* recovered
+${resolution.summary}
+firing since ${resolution.firstSeenAt}`,
+      })
+    : JSON.stringify({
+        event: 'alert.resolved',
+        condition: resolution.condition,
+        summary: resolution.summary,
+        firstSeenAt: resolution.firstSeenAt,
+        resolvedAt: resolution.resolvedAt,
+      });
+
+/** Posts a body somewhere. Injected so the sink is testable without a network. */
+export type AlertPoster = (body: string) => Promise<void>;
+
+/**
+ * The real transport.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * THE URL IS A SECRET AND MUST NEVER BE LOGGED
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * A Slack incoming-webhook URL is a bearer credential in path form: anyone
+ * holding it can post into the channel. So it is captured in this closure and
+ * never appears in a log line, an error message, or an alert body. Errors are
+ * reduced to a short reason before they go anywhere near the logger, because a
+ * fetch failure can carry the host — and sometimes the whole request — in its
+ * message.
+ *
+ * Three attempts, briefly spaced. Not more: the log line is the reliable record
+ * and an alerting path that retries for a minute is one that delays the next
+ * alert behind it.
+ */
+export const createAlertWebhookTransport = (options: {
+  readonly url: string;
+  readonly timeoutMs?: number;
+  readonly attempts?: number;
+  readonly fetchImpl?: typeof fetch;
+  readonly sleep?: (ms: number) => Promise<void>;
+}): AlertPoster => {
+  const timeoutMs = options.timeoutMs ?? 5_000;
+  const attempts = options.attempts ?? 3;
+  const doFetch = options.fetchImpl ?? fetch;
+  const sleep =
+    options.sleep ??
+    (async (ms: number) =>
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, ms);
+      }));
+
+  return async (body: string): Promise<void> => {
+    let lastReason = 'unknown';
+
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => {
+        controller.abort();
+      }, timeoutMs);
+
+      try {
+        const response = await doFetch(options.url, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body,
+          signal: controller.signal,
+        });
+        if (response.ok) return;
+        lastReason = `endpoint returned ${String(response.status)}`;
+        // 4xx other than 429 will not become true by trying again.
+        if (response.status < 500 && response.status !== 429) break;
+      } catch {
+        // Deliberately not reading the error: it can carry the URL.
+        lastReason = 'request failed or timed out';
+      } finally {
+        clearTimeout(timer);
+      }
+
+      if (attempt < attempts) await sleep(250 * attempt);
+    }
+
+    throw new Error(`alert webhook: ${lastReason}`);
+  };
+};
 
 /**
  * Adds an outbound webhook, keeping the log line.
@@ -115,32 +295,36 @@ export const createLogAlertSink = (logger: Logger): AlertSink => ({
 export const createWebhookAlertSink = (
   base: AlertSink,
   options: {
-    readonly url: string;
-    readonly post: (url: string, body: string) => Promise<void>;
+    readonly post: AlertPoster;
     readonly logger: Logger;
+    readonly format?: AlertWebhookFormat;
   },
-): AlertSink => ({
-  deliver: (alert) => {
-    base.deliver(alert);
+): AlertSink => {
+  const format = options.format ?? 'generic';
 
-    void options
-      .post(
-        options.url,
-        JSON.stringify({
-          condition: alert.condition,
-          severity: alert.severity,
-          summary: alert.summary,
-          observed: alert.observed,
-          firstSeenAt: alert.firstSeenAt,
-        }),
-      )
-      .catch((error: unknown) => {
-        // Swallowed on purpose. The alert is already in the log, and an
-        // unhandled rejection from the alerting path would be its own incident.
-        options.logger.error({ err: error }, 'alert webhook failed');
-      });
-  },
-});
+  const send = (body: string, what: string): void => {
+    void options.post(body).catch((error: unknown) => {
+      // Swallowed on purpose. The alert is already in the log, and an unhandled
+      // rejection from the alerting path would be its own incident. The message
+      // is the transport's own short reason, which never contains the URL.
+      options.logger.error(
+        { reason: error instanceof Error ? error.message : 'unknown', delivering: what },
+        'alert webhook failed — the alert is in the log only',
+      );
+    });
+  };
+
+  return {
+    deliver: (alert) => {
+      base.deliver(alert);
+      send(alertWebhookBody(alert, format), alert.condition);
+    },
+    resolve: (resolution) => {
+      base.resolve(resolution);
+      send(alertResolutionBody(resolution, format), `${resolution.condition}:resolved`);
+    },
+  };
+};
 
 /* -------------------------------------------------------------------------- */
 /* Evaluation                                                                  */
@@ -151,11 +335,15 @@ export interface AlertMonitor {
   evaluate(): readonly Alert[];
   /** Reports a safety-pipeline failure. Fires on the first one. */
   reportSafetyFailure(detail: string): void;
+  /** Reports a turn that went through the safety pipeline intact. */
+  reportSafetySuccess(): void;
   /** Reports an AI provider failure. Fires after several in a row. */
   reportAiFailure(): void;
   reportAiSuccess(): void;
   /** Reports a database connectivity failure. */
   reportDatabaseFailure(detail: string): void;
+  /** Reports that the database answered. Clears the database alert. */
+  reportDatabaseSuccess(): void;
   /** Alerts currently firing, for the health endpoint. */
   active(): readonly Alert[];
 }
@@ -170,6 +358,8 @@ export const createAlertMonitor = (options: {
   const { registry, sink, clock } = options;
 
   const firing = new Map<AlertCondition, Alert>();
+  /** When each firing condition was last actually observed to be true. */
+  const lastSeen = new Map<AlertCondition, number>();
   let consecutiveAiFailures = 0;
 
   /**
@@ -188,6 +378,8 @@ export const createAlertMonitor = (options: {
     summary: string,
     observed: Readonly<Record<string, number | string>>,
   ): Alert | undefined => {
+    lastSeen.set(condition, clock.now());
+
     const existing = firing.get(condition);
     if (existing) return undefined;
 
@@ -203,8 +395,39 @@ export const createAlertMonitor = (options: {
     return alert;
   };
 
+  /** Stops a condition firing, and says so. */
   const clear = (condition: AlertCondition): void => {
+    const alert = firing.get(condition);
     firing.delete(condition);
+    lastSeen.delete(condition);
+    if (!alert) return;
+
+    sink.resolve({
+      condition,
+      summary: alert.summary,
+      firstSeenAt: alert.firstSeenAt,
+      resolvedAt: clock.nowIso(),
+    });
+  };
+
+  /**
+   * Clears conditions that have gone quiet.
+   *
+   * ═══════════════════════════════════════════════════════════════════════
+   * WITHOUT THIS, THE SAFETY ALERT WORKS EXACTLY ONCE PER PROCESS.
+   * ═══════════════════════════════════════════════════════════════════════
+   *
+   * `safety_pipeline` and `database` are only ever told about failures, so
+   * nothing was able to clear them — and a condition that is already firing is
+   * not re-delivered, by design, so that a real outage does not page every
+   * minute. The two rules together meant the most important alert in the system
+   * went permanently silent after its first firing.
+   */
+  const expireQuiet = (): void => {
+    const now = clock.now();
+    for (const [condition, at] of [...lastSeen.entries()]) {
+      if (now - at >= thresholds.reArmAfterMs) clear(condition);
+    }
   };
 
   /** Totals a counter across every label combination. */
@@ -234,6 +457,10 @@ export const createAlertMonitor = (options: {
   return {
     evaluate: () => {
       const raised: Alert[] = [];
+
+      // Before anything else: a condition nobody has reported for a while is
+      // over, and somebody who was paged deserves to hear so.
+      expireQuiet();
 
       /* ---- Error rate ---- */
       const requests = counterTotal(TECHNICAL_METRICS.requestsTotal);
@@ -283,6 +510,13 @@ export const createAlertMonitor = (options: {
       raise('safety_pipeline', 'critical', 'The safety pipeline is failing.', { detail });
     },
 
+    /* A turn that completed with the safety layers intact. Not a threshold and
+     * not a rate — one clean turn is proof the pipeline is answering, which is
+     * the only positive signal this condition has. */
+    reportSafetySuccess: () => {
+      clear('safety_pipeline');
+    },
+
     reportAiFailure: () => {
       consecutiveAiFailures += 1;
       if (consecutiveAiFailures >= thresholds.aiFailures) {
@@ -302,6 +536,10 @@ export const createAlertMonitor = (options: {
 
     reportDatabaseFailure: (detail) => {
       raise('database', 'critical', 'The database is unreachable.', { detail });
+    },
+
+    reportDatabaseSuccess: () => {
+      clear('database');
     },
 
     active: () => [...firing.values()],

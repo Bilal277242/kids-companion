@@ -10,6 +10,7 @@ const deployedBase = {
   REDIS_TLS_ENABLED: 'true',
   REDIS_KEY_PREFIX: 'kc:prod:',
   SAFETY_ESCALATION_WEBHOOK_URL: 'https://alerts.example.com/hook',
+  ALERT_WEBHOOK_URL: 'https://alerts.example.com/ops',
   CORS_ALLOWED_ORIGINS: 'https://app.example.com',
   // A deployed environment must name a real rail; the mock one is refused.
   PAYMENTS_PROVIDER: 'stripe',
@@ -122,6 +123,22 @@ describe('cross-field rules', () => {
     const { SAFETY_ESCALATION_WEBHOOK_URL: _omitted, ...withoutWebhook } = deployedBase;
 
     expect(() => parseConfig(withoutWebhook)).toThrow(/SAFETY_ESCALATION_WEBHOOK_URL/);
+  });
+
+  it('refuses to start production with nowhere for an alert to go', () => {
+    /* Five alert conditions existed, were correct, were tested — and every one
+     * of them delivered a log line that nothing was watching. A paging system
+     * nobody receives is indistinguishable from a working one right up to the
+     * incident, which is why this is a boot refusal rather than a warning. */
+    const { ALERT_WEBHOOK_URL: _omitted, ...withoutAlerts } = deployedBase;
+
+    expect(() => parseConfig(withoutAlerts)).toThrow(/ALERT_WEBHOOK_URL/);
+  });
+
+  it('does not require an alert destination outside production', () => {
+    // Local and CI have no pager and should not pretend to.
+    expect(() => parseConfig({})).not.toThrow();
+    expect(parseConfig({}).ALERT_WEBHOOK_URL).toBeUndefined();
   });
 
   it('refuses to retain raw child audio in production without explicit acknowledgement', () => {

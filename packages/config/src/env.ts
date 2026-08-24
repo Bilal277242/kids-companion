@@ -370,6 +370,40 @@ const telemetrySchema = z.object({
   ANALYTICS_PROVIDER: z.enum(['posthog', 'none']).default('none'),
   ANALYTICS_WRITE_KEY: z.string().optional(),
   ANALYTICS_ENABLED: boolFromEnv.default(false),
+
+  /**
+   * Where a firing alert goes, beyond the log line.
+   *
+   * The log line is the reliable path and is never removed — every deployment
+   * already ships logs somewhere, and an alerting path with a network
+   * dependency fails exactly when the network does. This is the fast path, and
+   * without it "alerting" means a `fatal` line that something else would have
+   * to notice.
+   *
+   * TREAT AS A SECRET. A Slack incoming-webhook URL is a bearer credential in
+   * path form: anyone holding it can post into the channel. It is redacted in
+   * the config summary and never written to a log.
+   */
+  ALERT_WEBHOOK_URL: urlFromEnv.optional(),
+
+  /**
+   * `generic` posts a JSON object — point an Alertmanager receiver, an Opsgenie
+   * custom webhook, or anything in-house at it. `slack` posts the
+   * incoming-webhook `text` shape, which Mattermost and others also accept.
+   */
+  ALERT_WEBHOOK_FORMAT: z.enum(['generic', 'slack']).default('generic'),
+
+  /** Per attempt. Three attempts, briefly spaced, then the log line stands alone. */
+  ALERT_WEBHOOK_TIMEOUT_MS: intFromEnv({ min: 500, max: 30_000 }).default(5_000),
+
+  /**
+   * How often alert conditions are evaluated.
+   *
+   * Evaluation used to happen only when something scraped `/metrics` or
+   * `/alerts`, which meant a deployment with no scraper never evaluated a
+   * threshold at all.
+   */
+  ALERT_EVALUATION_INTERVAL_MS: intFromEnv({ min: 5_000 }).default(60_000),
 });
 
 const featureFlagSchema = z.object({
@@ -564,6 +598,12 @@ export const envSchema = baseSchema.superRefine((env, ctx) => {
       issue(
         'SAFETY_ESCALATION_WEBHOOK_URL',
         'is required in production — disclosures must reach a human (docs/CHILD_SAFETY.md §6)',
+      );
+    }
+    if (!env.ALERT_WEBHOOK_URL) {
+      issue(
+        'ALERT_WEBHOOK_URL',
+        'is required in production — without it every alert, including safety_pipeline, is a log line nothing is watching',
       );
     }
     if (env.REDIS_KEY_PREFIX === 'kc:local:') {

@@ -59,7 +59,12 @@ import {
   type ZodTypeProvider,
 } from 'fastify-type-provider-zod';
 
-import { createAlertMonitor, createLogAlertSink } from './alerts.js';
+import {
+  createAlertMonitor,
+  createAlertWebhookTransport,
+  createLogAlertSink,
+  createWebhookAlertSink,
+} from './alerts.js';
 import { createAuditLogger } from './audit.js';
 import { createLearningRecorder } from './learning-events.js';
 import { createPaymentStore } from './payment-store.js';
@@ -87,6 +92,7 @@ import { createEscalationDelivery } from './safety-escalation.js';
 import { createAttemptCounter, createPolicyStore } from './safety-store.js';
 import { createStoreBilling } from './store-billing.js';
 import { createSubscriptionReconciler } from './subscription-reconciler.js';
+import { createTurnHealthReporter } from './turn-health.js';
 
 export interface BuildAppOptions {
   readonly config: Config;
@@ -343,13 +349,65 @@ export const buildApp = async (options: BuildAppOptions) => {
 
   /* Alerts.
    *
-   * The default sink is a `fatal` log line rather than an outbound webhook:
-   * every deployment already ships logs somewhere, and an alerting path with a
-   * network dependency fails exactly when the network does. */
+   * ═══════════════════════════════════════════════════════════════════════
+   * THE LOG LINE IS THE FLOOR, NOT THE DESTINATION.
+   * ═══════════════════════════════════════════════════════════════════════
+   *
+   * A `fatal` log line is the reliable path — every deployment already ships
+   * logs somewhere, and an alerting path with a network dependency fails
+   * exactly when the network does. It is kept underneath the webhook rather
+   * than replaced by it.
+   *
+   * But on its own it was never an alert. It was a line something else would
+   * have to notice, and nothing did. Production now refuses to boot without a
+   * destination, for the same reason it refuses to boot without an escalation
+   * endpoint. */
+  const logSink = createLogAlertSink(app.log);
+  const alertSink =
+    config.ALERT_WEBHOOK_URL === undefined
+      ? logSink
+      : createWebhookAlertSink(logSink, {
+          post: createAlertWebhookTransport({
+            url: config.ALERT_WEBHOOK_URL,
+            timeoutMs: config.ALERT_WEBHOOK_TIMEOUT_MS,
+          }),
+          logger: app.log,
+          format: config.ALERT_WEBHOOK_FORMAT,
+        });
+
+  if (config.ALERT_WEBHOOK_URL === undefined) {
+    // Logged on every boot rather than left as a silent default, so "alerts go
+    // nowhere" is a visible property of the environment.
+    app.log.warn(
+      { control: 'alert_destination' },
+      'no ALERT_WEBHOOK_URL configured: alerts will be log lines only',
+    );
+  }
+
   const alertMonitor = createAlertMonitor({
     registry: metricsRegistry,
-    sink: createLogAlertSink(app.log),
+    sink: alertSink,
     clock,
+  });
+
+  /* ═══════════════════════════════════════════════════════════════════════
+   * SOMETHING HAS TO ASK.
+   * ═══════════════════════════════════════════════════════════════════════
+   *
+   * `evaluate()` was called only by the metrics and alerts endpoints, so a
+   * deployment with nothing scraping them never evaluated a threshold — the
+   * error-rate and latency alerts could not fire at all. It also drives the
+   * sweep that clears conditions which have gone quiet.
+   */
+  /* The producer for three alert conditions that had none. */
+  const turnHealth = createTurnHealthReporter(alertMonitor);
+
+  const alertTimer = setInterval(() => {
+    alertMonitor.evaluate();
+  }, config.ALERT_EVALUATION_INTERVAL_MS);
+  alertTimer.unref();
+  app.addHook('onClose', () => {
+    clearInterval(alertTimer);
   });
 
   await app.register(errorBoundary);
@@ -384,7 +442,7 @@ export const buildApp = async (options: BuildAppOptions) => {
     transform: jsonSchemaTransform,
   });
 
-  await app.register(healthRoutes(config, { db }));
+  await app.register(healthRoutes(config, { db, alerts: alertMonitor }));
   await app.register(
     authRoutes({
       auth,
@@ -445,6 +503,7 @@ export const buildApp = async (options: BuildAppOptions) => {
       clock,
       escalations,
       learning,
+      health: turnHealth,
     }),
     { prefix: '/api' },
   );
@@ -475,6 +534,7 @@ export const buildApp = async (options: BuildAppOptions) => {
       encryptionKeyId: 'placeholder',
       maxExchanges: config.AI_CONTEXT_MAX_EXCHANGES,
       rateLimitPerMinute: config.RATE_LIMIT_VOICE_PER_MINUTE,
+      health: turnHealth,
     }),
     { prefix: '/api' },
   );
