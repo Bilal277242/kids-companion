@@ -20,6 +20,7 @@ export type FailureKind =
   | 'server'
   | 'unauthorised'
   | 'not_allowed_now'
+  | 'no_stories_left'
   | 'nothing_heard'
   | 'microphone_blocked'
   | 'unknown';
@@ -42,6 +43,10 @@ const MESSAGES: Readonly<Record<FailureKind, string>> = Object.freeze({
   // cannot fix one; this is a grown-up's job and the wording sends them to find one.
   unauthorised: "Let's go and find a grown-up to help!",
   not_allowed_now: "Let's play again a bit later!",
+  // The weekly story allowance, which deserves better than the generic "later":
+  // the child can still CHAT right now, and the sentence points at that instead
+  // of leaving them at a door that will not open until Monday.
+  no_stories_left: "We've made all our stories for this week! Shall we just talk instead?",
   nothing_heard: "Ooh, I didn't quite catch that! Can you say it again?",
   microphone_blocked: 'I need to be able to hear you! A grown-up can help with that.',
   unknown: "Something went a bit wobbly. Let's try again!",
@@ -88,15 +93,17 @@ export const toFriendlyFailure = (input: {
         ? 'slow'
         : input.status === 401 || input.status === 403
           ? 'unauthorised'
-          : code === 'SUBSCRIPTION_REQUIRED' || input.status === 402
-            ? 'not_allowed_now'
-            : input.status === 429
+          : code === 'QUOTA_WEEKLY_STORIES_EXHAUSTED'
+            ? 'no_stories_left'
+            : code === 'SUBSCRIPTION_REQUIRED' || input.status === 402
               ? 'not_allowed_now'
-              : input.status !== undefined && input.status >= 500
-                ? 'server'
-                : input.status === 400
-                  ? 'not_allowed_now'
-                  : 'unknown';
+              : input.status === 429
+                ? 'not_allowed_now'
+                : input.status !== undefined && input.status >= 500
+                  ? 'server'
+                  : input.status === 400
+                    ? 'not_allowed_now'
+                    : 'unknown';
 
   return {
     kind,

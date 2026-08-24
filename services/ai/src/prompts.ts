@@ -5,6 +5,7 @@ import {
   REDIRECTION_GUIDANCE,
   rulesFor,
   SENSITIVE_TOPIC_GUIDANCE,
+  STORY_GUIDANCE,
 } from './age-rules.js';
 import { isCharacterAllowedFor, type CharacterDefinition } from './characters.js';
 
@@ -33,6 +34,13 @@ export interface PromptInputs {
   /** Additional parental restrictions, e.g. storytelling disabled. */
   readonly contentRestrictions: readonly string[];
   readonly correctionStyle: 'none' | 'gentle' | 'active';
+  /**
+   * Whether this session is a story.
+   *
+   * A template flag, not parent-supplied data — which is why it is passed to the
+   * baseline prompt too. See `buildProviderContext`.
+   */
+  readonly storyMode?: boolean;
 }
 
 const LANGUAGE_NAMES: Readonly<Record<string, string>> = {
@@ -131,6 +139,15 @@ export const buildSystemPrompt = (inputs: PromptInputs): string => {
 
   if (inputs.contentRestrictions.length > 0) {
     parts.push('', section('Additional restrictions', inputs.contentRestrictions));
+  }
+
+  /* AFTER the restrictions, deliberately. A later instruction tends to carry
+   * more weight, and "do not tell stories" is a parental control — it must not
+   * be readable as something the story frame below supersedes. The route
+   * refuses to start a story at all when that control is off, so the two can
+   * never both be present; the ordering is the belt to that braces. */
+  if (inputs.storyMode === true) {
+    parts.push('', section('Making a story together', STORY_GUIDANCE));
   }
 
   parts.push(

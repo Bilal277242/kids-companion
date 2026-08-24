@@ -30,6 +30,7 @@ export {
   REDIRECTION_GUIDANCE,
   rulesFor,
   SENSITIVE_TOPIC_GUIDANCE,
+  STORY_GUIDANCE,
   type AgeRules,
 } from './age-rules.js';
 

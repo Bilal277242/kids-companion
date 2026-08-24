@@ -141,6 +141,7 @@ const conversationSchema = z.object({
   character: characterSchema,
   language: z.string(),
   status: z.enum(['active', 'ended', 'flagged']),
+  mode: z.enum(['chat', 'story']),
   messageCount: z.number().int(),
   turnsUsed: z.number().int(),
   startedAt: z.string(),
@@ -177,6 +178,8 @@ interface EntitlementRow {
   daily_turn_limit: number;
   max_conversation_turns: number;
   concurrent_conversation_limit: number;
+  /** NULL means unlimited, which is how the paid plans are seeded. */
+  weekly_story_limit: number | null;
 }
 
 /**
@@ -195,11 +198,12 @@ const loadEntitlements = async (
   dailyTurnLimit: number;
   used: number;
   active: number;
+  storiesThisWeek: number;
   resetsAt: string;
 }> => {
   const { rows } = await tx.query<EntitlementRow>(
     `select plan_code, tier, subscription_status, daily_turn_limit,
-            max_conversation_turns, concurrent_conversation_limit
+            max_conversation_turns, concurrent_conversation_limit, weekly_story_limit
        from app.parent_entitlements($1)`,
     [parentId],
   );
@@ -214,11 +218,15 @@ const loadEntitlements = async (
     daily_turn_limit: 20,
     max_conversation_turns: 20,
     concurrent_conversation_limit: 1,
+    // The free plan's seeded value. Failing open to unlimited stories because a
+    // join missed is the expensive direction of this mistake.
+    weekly_story_limit: 3,
   };
 
-  const { rows: usage } = await tx.query<{ used: number; active: number }>(
+  const { rows: usage } = await tx.query<{ used: number; active: number; stories: number }>(
     `select app.child_turns_used_today($1) as used,
-            app.child_active_conversations($1) as active`,
+            app.child_active_conversations($1) as active,
+            app.child_stories_this_week($1) as stories`,
     [childId],
   );
 
@@ -230,6 +238,7 @@ const loadEntitlements = async (
     dailyTurnLimit: Math.min(plan.daily_turn_limit, configuredCeiling),
     used: usage[0]?.used ?? 0,
     active: usage[0]?.active ?? 0,
+    storiesThisWeek: usage[0]?.stories ?? 0,
   };
 };
 
@@ -244,6 +253,48 @@ const loadEntitlements = async (
 const nextDailyReset = async (tx: Queryable): Promise<string> => {
   const { rows } = await tx.query<{ resets_at: string | Date }>(
     `select (date_trunc('day', now() at time zone 'utc') + interval '1 day')
+              at time zone 'utc' as resets_at`,
+  );
+  const value = rows[0]?.resets_at;
+  return value === undefined ? '' : new Date(value).toISOString();
+};
+
+/**
+ * How many turns a story needs before finishing it counts as finishing a story.
+ *
+ * The parent dashboard promises "stories your child finished" and says plainly
+ * that "a story your child abandoned halfway is not counted". Something has to
+ * decide where halfway is, and any number here is a judgement rather than a
+ * measurement — this one is the smallest exchange that can hold a beginning, a
+ * middle and an end.
+ *
+ * Erring low would inflate a number a parent is told means something. Erring
+ * high would quietly refuse to credit a real, short story from a three-year-old
+ * whose replies are two sentences long.
+ */
+const STORY_MINIMUM_TURNS = 3;
+
+/**
+ * Whether ending this conversation finished a story.
+ *
+ * Note what is NOT here: a story that is never explicitly ended never reaches
+ * this function, so an abandoned story is not counted — which is exactly what
+ * the dashboard tells the parent. The rollup backstop in the worker rebuilds
+ * the day's turns and minutes for such a session, and records no story.
+ */
+const isCompletedStory = (row: ConversationRow): boolean =>
+  row.mode === 'story' && Math.ceil(row.message_count / 2) >= STORY_MINIMUM_TURNS;
+
+/**
+ * Next Monday — when the weekly story allowance starts again.
+ *
+ * From Postgres for the same reason as `nextDailyReset`: the boundary the API
+ * quotes to a parent must be the one `app.child_stories_this_week` counts from,
+ * not a second clock that agrees with it most of the time.
+ */
+const nextWeeklyReset = async (tx: Queryable): Promise<string> => {
+  const { rows } = await tx.query<{ resets_at: string | Date }>(
+    `select (date_trunc('week', now() at time zone 'utc') + interval '1 week')
               at time zone 'utc' as resets_at`,
   );
   const value = rows[0]?.resets_at;
@@ -313,6 +364,7 @@ interface ConversationRow {
   display_name: string;
   language_code: string;
   status: 'active' | 'ended' | 'flagged';
+  mode: 'chat' | 'story';
   message_count: number;
   started_at: string;
   ended_at: string | null;
@@ -320,7 +372,8 @@ interface ConversationRow {
 }
 
 const CONVERSATION_COLUMNS = `cv.id, cv.child_id, cv.character_id, ch.slug, ch.display_name,
-        cv.language_code, cv.status, cv.message_count, cv.started_at, cv.ended_at, cv.end_reason`;
+        cv.language_code, cv.status, cv.mode, cv.message_count, cv.started_at, cv.ended_at,
+        cv.end_reason`;
 
 /** The single place a conversation row becomes a response body. */
 const presentConversation = (row: ConversationRow): z.infer<typeof conversationSchema> => ({
@@ -329,6 +382,7 @@ const presentConversation = (row: ConversationRow): z.infer<typeof conversationS
   character: { id: row.character_id, slug: row.slug, displayName: row.display_name },
   language: row.language_code,
   status: row.status,
+  mode: row.mode,
   messageCount: row.message_count,
   // A turn is the round trip, and it is what limits are expressed in. Exposing
   // only `messageCount` would make a client divide by two and get it wrong the
@@ -435,6 +489,11 @@ export const conversationRoutes =
             characterId: z.uuid().optional(),
             /** Falls back to the child's primary language. */
             language: z.string().min(2).max(5).optional(),
+            /**
+             * What kind of session this is. Defaults to `chat`, so a client
+             * that has never heard of stories behaves exactly as before.
+             */
+            mode: z.enum(['chat', 'story']).default('chat'),
           }),
           response: { 201: conversationSchema.extend({ limits: limitsSchema }) },
         },
@@ -497,6 +556,37 @@ export const conversationRoutes =
               active: entitlements.active,
               plan: entitlements.plan.plan_code,
             });
+          }
+
+          if (request.body.mode === 'story') {
+            /* ═══════════════════════════════════════════════════════════════
+             * THE PARENTAL CONTROL DECIDES WHETHER STORIES EXIST AT ALL.
+             * ═══════════════════════════════════════════════════════════════
+             *
+             * `storytelling_enabled` used to reach the model as a line of
+             * prompt text — "Do not tell stories." — and nothing else. That
+             * made a parental control into a request. Refusing the session is
+             * the enforcement; the prompt line stays as the second layer for a
+             * chat that drifts towards a story on its own.
+             */
+            if (!context.storytelling_enabled) {
+              throw validationFailed([
+                { field: 'mode', issue: 'stories are turned off for this child' },
+              ]);
+            }
+
+            /* NULL is unlimited, which is how the paid plans are seeded.
+             * Treating null as zero would take stories away from the people who
+             * paid for them. */
+            const storyLimit = entitlements.plan.weekly_story_limit;
+            if (storyLimit !== null && entitlements.storiesThisWeek >= storyLimit) {
+              throw quotaExhausted('QUOTA_WEEKLY_STORIES_EXHAUSTED', {
+                limit: storyLimit,
+                used: entitlements.storiesThisWeek,
+                plan: entitlements.plan.plan_code,
+                resetsAt: await nextWeeklyReset(tx),
+              });
+            }
           }
 
           const characterId =
@@ -571,13 +661,13 @@ export const conversationRoutes =
           // missing the database refuses it, whatever this handler believes.
           const { rows } = await tx.query<ConversationRow>(
             `with created as (
-               insert into conversations (child_id, character_id, language_code)
-               values ($1, $2, $3)
+               insert into conversations (child_id, character_id, language_code, mode)
+               values ($1, $2, $3, $4)
                returning *
              )
              select ${CONVERSATION_COLUMNS}
                from created cv join ai_characters ch on ch.id = cv.character_id`,
-            [childId, characterId, language],
+            [childId, characterId, language, request.body.mode],
           );
 
           const conversation = rows[0];
@@ -603,6 +693,7 @@ export const conversationRoutes =
             metadata: {
               character: created.conversation.slug,
               plan: created.entitlements.plan.plan_code,
+              mode: created.conversation.mode,
             },
           },
           request,
@@ -664,6 +755,7 @@ export const conversationRoutes =
             id: string;
             child_id: string;
             status: 'active' | 'ended' | 'flagged';
+            mode: 'chat' | 'story';
             language_code: SupportedLanguage;
             prompt_key: string | null;
             message_count: number;
@@ -680,7 +772,7 @@ export const conversationRoutes =
             farewell_style: string;
             educational_objectives: string[];
           }>(
-            `select cv.id, cv.child_id, cv.status, cv.language_code,
+            `select cv.id, cv.child_id, cv.status, cv.mode, cv.language_code,
                     ch.prompt_key, cv.message_count,
                     ch.slug, ch.display_name, ch.description, ch.allowed_age_groups,
                     ch.personality_traits, ch.conversation_style, ch.vocabulary_style,
@@ -870,6 +962,18 @@ export const conversationRoutes =
               text: decodeContent(m.content_ciphertext),
               sequence: m.sequence,
             })),
+            /* ═══════════════════════════════════════════════════════════════
+             * THE PARENTAL CONTROL WINS OVER THE MODE, ALWAYS.
+             * ═══════════════════════════════════════════════════════════════
+             *
+             * Starting a story is refused when storytelling is off, so normally
+             * these cannot disagree. They can disagree in one window: a parent
+             * turns storytelling off while a story session is open. The control
+             * takes effect on the child's very next turn — the story stops
+             * being a story — rather than at the end of a session nobody is
+             * obliged to end.
+             */
+            storyMode: loaded.conversation.mode === 'story' && loaded.context.storytelling_enabled,
             learningObjectives: loaded.context.topic_keys,
             blockedTopics: loaded.context.blocked_topics,
             contentRestrictions: [
@@ -1315,6 +1419,7 @@ export const conversationRoutes =
           childId: ended.child_id,
           conversationId: ended.id,
           seconds: seconds[0]?.seconds ?? 0,
+          storyCompleted: isCompletedStory(ended),
         });
 
         return await reply.status(200).send(presentConversation(ended));

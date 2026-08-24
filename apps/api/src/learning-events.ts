@@ -120,6 +120,14 @@ export const createLearningRecorder = (options: LearningRecorderOptions) => {
       childId: string;
       conversationId: string;
       seconds: number;
+      /**
+       * Whether this was a story the child actually finished.
+       *
+       * The parent dashboard says "Stories your child finished with their
+       * character" and "a story your child abandoned halfway is not counted".
+       * The route decides; this only records what it was told.
+       */
+      storyCompleted?: boolean;
     }): Promise<void> => {
       await safely('conversation_ended', async () => {
         const occurredAt = new Date(clock.now());
@@ -143,6 +151,19 @@ export const createLearningRecorder = (options: LearningRecorderOptions) => {
                     payload: { seconds: Math.round(input.seconds) },
                     occurredAt,
                     idempotencyKey: `seconds:${input.conversationId}`,
+                  },
+                ]
+              : []),
+            ...(input.storyCompleted === true
+              ? [
+                  {
+                    childId: input.childId,
+                    eventType: 'story_completed' as const,
+                    conversationId: input.conversationId,
+                    occurredAt,
+                    // Ending is idempotent, so ending twice must not record two
+                    // stories.
+                    idempotencyKey: `story:${input.conversationId}`,
                   },
                 ]
               : []),

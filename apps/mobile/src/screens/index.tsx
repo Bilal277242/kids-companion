@@ -322,16 +322,25 @@ export const ConversationScreen = ({
   // Start a session once, when the screen opens.
   useEffect(() => {
     let cancelled = false;
-    void api.post<{ id: string }>('/api/conversations/start', { childId }).then((result) => {
-      if (cancelled) return;
-      setStarting(false);
-      if (result.ok && result.data) setConversationId(result.data.id);
-      else dispatch({ type: 'FAILED', failure: result.failure ?? failureFor('unknown') });
-    });
+    /* The mode is the whole difference between a chat and a story on the
+     * server: it changes the prompt, it is what the weekly story limit counts,
+     * and finishing one is what records a story on the parent's dashboard.
+     * Sending it was the missing half of this screen. */
+    void api
+      .post<{ id: string }>('/api/conversations/start', {
+        childId,
+        mode: mode === 'story' ? 'story' : 'chat',
+      })
+      .then((result) => {
+        if (cancelled) return;
+        setStarting(false);
+        if (result.ok && result.data) setConversationId(result.data.id);
+        else dispatch({ type: 'FAILED', failure: result.failure ?? failureFor('unknown') });
+      });
     return () => {
       cancelled = true;
     };
-  }, [api, childId]);
+  }, [api, childId, mode]);
 
   const press = () => {
     if (talk.state === 'recording') {

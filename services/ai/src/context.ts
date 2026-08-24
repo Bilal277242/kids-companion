@@ -37,6 +37,8 @@ export interface ConversationContextInput {
   readonly blockedTopics: readonly string[];
   readonly contentRestrictions: readonly string[];
   readonly correctionStyle: 'none' | 'gentle' | 'active';
+  /** Whether the child asked to make a story. Changes the prompt, nothing else. */
+  readonly storyMode?: boolean;
 }
 
 export interface ContextLimits {
@@ -226,6 +228,7 @@ export const buildProviderContext = (
     blockedTopics: input.blockedTopics,
     contentRestrictions: input.contentRestrictions,
     correctionStyle: input.correctionStyle,
+    storyMode: input.storyMode === true,
   });
 
   // Fails loudly if a refactor dropped a safety rule.
@@ -250,6 +253,9 @@ export const buildProviderContext = (
     blockedTopics: [],
     contentRestrictions: [],
     correctionStyle: input.correctionStyle,
+    // Template text, not parent-supplied data. Omitting it here would make the
+    // story section look like something a parent injected.
+    storyMode: input.storyMode === true,
   });
 
   assertNoProhibitedData(context, [input.childName], baselinePrompt);

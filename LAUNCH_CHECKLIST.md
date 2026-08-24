@@ -13,8 +13,8 @@ executed. Nothing is marked PASS for existing.
 
 |                  | Count |
 | ---------------- | ----: |
-| **PASS**         |    20 |
-| **FAIL**         |     9 |
+| **PASS**         |    21 |
+| **FAIL**         |     8 |
 | **NOT VERIFIED** |    17 |
 
 **Not one item in Infrastructure or Mobile passes.** No container has been
@@ -22,17 +22,20 @@ built, no environment has ever run, no build has been produced for either
 platform. Those two categories are not "nearly there" — they have not started
 being verified.
 
-Two product features are also weaker than they appear, and both were found
-during this assessment rather than earlier:
+Two product features were also weaker than they appeared, both found during
+this assessment rather than earlier. **Both have since been fixed**; the original
+findings are kept verbatim below rather than deleted, because what a release
+review said before the fix is the part worth being able to read again:
 
 > ~~**The parent dashboard's activity numbers will always be zero.** The pipeline
 > is complete — event → rollup → dashboard — except that nothing ever emits the
 > event. See P-01.~~ **RESOLVED** — the recorder is wired and proven end to end.
 > See P-01.
 >
-> **"Stories" is a conversation screen with different placeholder text.** No
+> ~~**"Stories" is a conversation screen with different placeholder text.** No
 > story is tracked, and the plan's weekly story limit is enforced nowhere.
-> See P-02.
+> See P-02.~~ **RESOLVED** — the mode reaches the server, changes the prompt, is
+> counted against the plan, and records a story. See P-02.
 
 ---
 
@@ -85,7 +88,7 @@ real Postgres beyond CI's service container.
 | AI conversation  | **NOT VERIFIED** | implemented, tested against a **mock model**. No real model has ever answered a child                       |
 | Voice            | **NOT VERIFIED** | implemented, tested. Playback was broken until this week (relative, unauthenticated URL); STT/TTS are mocks |
 | Speech practice  | **NOT VERIFIED** | implemented, tested. Scoring is real; the analysis provider is a mock                                       |
-| Stories          | **FAIL**         | implemented in name only — see **P-02**                                                                     |
+| Stories          | **PASS**         | implemented, tested, **verified end to end** — prompt, plan limit and progress counter all real (P-02)      |
 | Characters       | **PASS**         | implemented, tested. Four seeded, each with traits, colour and a face for pre-readers                       |
 | Progress         | **PASS**         | implemented, tested, **verified end to end** — talking to the companion moves the numbers (P-01 resolved)   |
 | Parent dashboard | **PASS**         | implemented, tested, verified. Activity numbers are produced by real use, not seeded (P-01 resolved)        |
@@ -163,7 +166,7 @@ permit exactly that one update — a provenance column moving to null, every oth
 column identical — and nothing else. Erasure outranks immutability. Both halves
 are now tested, including deleting a child who has learning events.
 
-### P-02 · "Stories" is a label, not a feature
+### P-02 · "Stories" is a label, not a feature · ~~**blocking**~~ **RESOLVED**
 
 `StoryScreen` is `<ConversationScreen mode="story" />`, and `mode` changes
 exactly two things: a `testID`, and one line of body text ("Shall we make a
@@ -178,6 +181,50 @@ permits the model to tell stories at all — but that is a permission, not a mod
 
 A plan advertising a weekly story limit that is never enforced, next to a
 progress counter that never moves, is a feature claim the product does not meet.
+
+#### Resolution
+
+A conversation now carries a `mode` (`chat` or `story`), set from the request
+and defaulting to `chat` — so a client that predates this behaves exactly as it
+did. A story is still a conversation: same messages, same safety pipeline, same
+retention, same RLS. Only four things change.
+
+| What                   | Before                  | Now                                                                         |
+| ---------------------- | ----------------------- | --------------------------------------------------------------------------- |
+| The prompt             | identical to a chat     | a `Making a story together` section, placed **below** the safety block      |
+| `storytelling_enabled` | one line of prompt text | the session is **refused**; the prompt line stays as the second layer       |
+| `weekly_story_limit`   | read by nothing         | enforced at `/start` — `429 QUOTA_WEEKLY_STORIES_EXHAUSTED` with `resetsAt` |
+| `story_completed`      | emitted by nothing      | emitted when a story is finished, so the progress counter moves             |
+
+Four decisions worth stating, because each could reasonably have gone the other
+way:
+
+1. **A story is built with the child, not performed at them.** The obvious
+   reading of "tell me a story" is a monologue, and it would contradict the
+   reply-length limits that exist because a three-year-old cannot hold six
+   sentences — and would turn a conversation app into a playback device. The
+   character builds it a beat at a time and hands it back constantly.
+2. **The story frame sits below the safety rules and below the parental
+   restrictions.** A later instruction tends to carry more weight, and "do not
+   tell stories" must never be readable as something the story frame supersedes.
+   Asserted in a test.
+3. **A session with nothing said in it does not spend a story.** A five-year-old
+   opens Story and the tablet is taken away; counting that would burn one of
+   their three for the week, and they can neither understand it nor undo it.
+4. **NULL means unlimited.** The paid plans are seeded with a null limit.
+   Treating null as zero would take stories away from precisely the people who
+   paid for them.
+
+**Verification.** `tests/integration/stories.test.ts` — 14 tests through the
+HTTP API, including one that wraps the AI provider and reads the system prompt
+off the wire, because every piece of this can be individually correct while the
+mode never reaches the model, which is exactly the state it was in before. Plus
+5 unit tests in `services/ai/src/prompts.test.ts` for the prompt itself.
+
+**Still true, and out of scope here.** The child app shows a Story tile whether
+or not the parent has enabled storytelling; a child who taps it gets a warm
+refusal rather than never seeing the tile. Hiding it needs the child app to know
+the parental controls, which it currently does not fetch.
 
 ---
 
@@ -288,13 +335,13 @@ that need review before a first submission, not after a rejection.
 
 | Item              | Status   | Evidence level                                                                                                            |
 | ----------------- | -------- | ------------------------------------------------------------------------------------------------------------------------- |
-| Unit tests        | **PASS** | 760 tests. Verified — they run, and they have caught real defects                                                         |
-| Integration tests | **PASS** | 722 tests against the real app, real plugins, real SQL, real RLS                                                          |
+| Unit tests        | **PASS** | 765 tests. Verified — they run, and they have caught real defects                                                         |
+| Integration tests | **PASS** | 736 tests against the real app, real plugins, real SQL, real RLS                                                          |
 | E2E tests         | **FAIL** | **never executed.** 5 Vitest specs skip without Docker; 7 Playwright specs have never run — browsers were never installed |
 | Performance tests | **PASS** | implemented and executed. Ten scenarios, a concurrency ladder, p50/p95/p99, and they found two real defects               |
 | Security tests    | **PASS** | 49 tests, twelve named attacks, with positive controls so a passing suite cannot be passing against nothing               |
 
-**Current: 1,482 passing, 5 skipped, 0 failing.** Coverage 88.2% statements,
+**Current: 1,501 passing, 5 skipped, 0 failing.** Coverage 88.2% statements,
 90.4% lines, against a 70% floor.
 
 The honest caveat that applies to every row above: **integration tests run
@@ -320,7 +367,9 @@ configuration are not.
    instance count — including the one that makes password guessing impractical.
 6. **Transcript retention**, or withdraw the control that claims it.
 7. **An alert destination** that is not a log file.
-8. **Stories** (P-02) — implement it or stop advertising it in the plan table.
+8. ~~**Stories** (P-02) — implement it or stop advertising it in the plan table.~~
+   **RESOLVED** — implemented, including the plan limit that was advertised and
+   never enforced.
 
 Then: error tracking, a domain and certificates, mobile release configuration,
 at least one verified payment rail, the AI spend ceiling, and executing the e2e

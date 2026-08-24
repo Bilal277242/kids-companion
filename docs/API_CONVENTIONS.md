@@ -41,6 +41,23 @@ Two things are worth knowing about how the conversation endpoints refuse work.
 
 **Quota and subscription errors carry a `meta` object.** Error bodies otherwise expose only `code`, `message`, `requestId`, and `details`. `meta` is an explicit opt-in for facts a client is meant to read — the limit, what was used, when it resets — and is set per error constructor rather than by default, so exposing anything through it is a decision someone made.
 
+### 1.3 Conversation mode
+
+`POST /api/conversations/start` takes an optional `mode`, either `chat` (the
+default) or `story`. It is echoed on every conversation body.
+
+The mode is not cosmetic. It changes the system prompt, it is what the plan's
+weekly story limit counts, and finishing a story session is what records a story
+on the parent's progress screen. Two refusals are specific to it:
+
+| Situation                                            | Response                                              |
+| ---------------------------------------------------- | ----------------------------------------------------- |
+| The parent has turned storytelling off for the child | `400 VALIDATION_FAILED` on `mode`                     |
+| The weekly story allowance is spent                  | `429 QUOTA_WEEKLY_STORIES_EXHAUSTED`, with `resetsAt` |
+
+Omitting `mode` is always safe: a client that predates it gets exactly the
+behaviour it had before.
+
 ```json
 {
   "error": {

@@ -110,6 +110,7 @@ interface VoiceContextRow {
   is_paused: boolean;
   topic_keys: string[];
   conversation_status: 'active' | 'ended' | 'flagged';
+  conversation_mode: 'chat' | 'story';
   language_code: SupportedLanguage;
   prompt_key: string | null;
   message_count: number;
@@ -145,6 +146,7 @@ const loadVoiceContext = async (
               array[]::text[]
             ) as topic_keys,
             cv.status as conversation_status,
+            cv.mode as conversation_mode,
             cv.language_code,
             ch.prompt_key,
             cv.message_count,
@@ -388,6 +390,12 @@ export const voiceRoutes =
                   text: decodeContent(m.content_ciphertext),
                   sequence: m.sequence,
                 })),
+                // Same rule as the text route: the parental control wins over
+                // the mode, so a story stops being one the moment it is turned
+                // off — on the child's next turn, not at the end of a session.
+                storyMode:
+                  loaded.context.conversation_mode === 'story' &&
+                  loaded.context.storytelling_enabled,
                 learningObjectives: loaded.context.topic_keys,
                 blockedTopics: loaded.context.blocked_topics,
                 contentRestrictions: [

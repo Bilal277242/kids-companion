@@ -227,3 +227,78 @@ describe('character catalogue', () => {
     }
   });
 });
+
+/* ========================================================================== */
+/* Story mode                                                                 */
+/* ========================================================================== */
+
+describe('story mode', () => {
+  it('is absent unless it is asked for', () => {
+    // The default must be a chat. A client that has never heard of stories, or
+    // a route that forgets to pass the flag, gets exactly the prompt it did
+    // before this existed.
+    expect(buildSystemPrompt(base())).not.toContain('Making a story together');
+  });
+
+  it('asks the character to build the story WITH the child', () => {
+    /* ═══════════════════════════════════════════════════════════════════════
+     * NOT A MONOLOGUE.
+     * ═══════════════════════════════════════════════════════════════════════
+     *
+     * The obvious reading of "tell me a story" would contradict the reply
+     * length limits and would turn a conversation app into a playback device —
+     * the child stops talking, which is the one thing the product exists to
+     * make them do.
+     */
+    const prompt = buildSystemPrompt(base({ storyMode: true }));
+
+    expect(prompt).toContain('Making a story together');
+    expect(prompt).toContain('Never tell the whole story at once');
+    expect(prompt.toLowerCase()).toContain('what happens next');
+  });
+
+  it('does not relax a single safety rule', () => {
+    // A story frame is the most natural way for prohibited content to arrive
+    // and the most tempting place to treat it as make-believe and harmless.
+    const prompt = buildSystemPrompt(base({ storyMode: true }));
+
+    expect(() => {
+      assertInvariantsPresent(prompt);
+    }).not.toThrow();
+    for (const invariant of INVARIANTS) {
+      expect(prompt).toContain(invariant);
+    }
+  });
+
+  it('keeps the story frame below the safety rules and below the restrictions', () => {
+    /* ═══════════════════════════════════════════════════════════════════════
+     * ORDERING IS THE POINT.
+     * ═══════════════════════════════════════════════════════════════════════
+     *
+     * A later instruction tends to carry more weight. "Do not tell stories" is
+     * a parental control, so the story frame must never sit above it and read
+     * as something that supersedes it.
+     */
+    const prompt = buildSystemPrompt(
+      base({ storyMode: true, contentRestrictions: ['Do not tell stories.'] }),
+    );
+
+    expect(prompt.indexOf('Rules you must never break')).toBeLessThan(
+      prompt.indexOf('Making a story together'),
+    );
+    expect(prompt.indexOf('Do not tell stories.')).toBeLessThan(
+      prompt.indexOf('Making a story together'),
+    );
+    // And still below the persona, which stays last.
+    expect(prompt.indexOf('Making a story together')).toBeLessThan(prompt.indexOf('Who you are'));
+  });
+
+  it('still obeys the age group reply length', () => {
+    // "Tell a story" must not become a licence to write six paragraphs to a
+    // three-year-old. The length rule is stated once and applies to every mode.
+    const rules = rulesFor('AGE_3_5');
+    const prompt = buildSystemPrompt(base({ ageGroup: 'AGE_3_5', storyMode: true }));
+
+    expect(prompt).toContain(`Never write more than ${String(rules.maxSentences)} sentences`);
+  });
+});
